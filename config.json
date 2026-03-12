@@ -1,0 +1,16 @@
+{
+    "total_accounts": 30,
+    "concurrent_workers": 15,
+    "headless": false,
+    "proxy": "",
+    "cf_worker_domain": "vsmail_temp_email.17719942125zhan.workers.dev",
+    "cf_email_domain": "vsmailultra.com",
+    "cf_admin_password": "Ab123168.",
+    "oauth_issuer": "https://auth.openai.com",
+    "oauth_client_id": "app_EMoamEEZ73f0CkXaXp7hrann",
+    "oauth_redirect_uri": "http://localhost:1455/auth/callback",
+    "accounts_file": "accounts.txt",
+    "csv_file": "registered_accounts.csv",
+    "ak_file": "ak.txt",
+    "rk_file": "rk.txt"
+}
