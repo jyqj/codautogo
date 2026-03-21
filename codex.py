@@ -36,6 +36,7 @@ OpenAI 协议注册机 (Protocol Keygen) v5 — 全流程纯 HTTP 实现
 """
 
 import json
+import argparse
 import os
 import re
 import sys
@@ -47,10 +48,11 @@ import string
 import secrets
 import hashlib
 import base64
+import zlib
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone, timedelta
-from urllib.parse import urlparse, parse_qs, urlencode, quote
+from urllib.parse import urlparse, parse_qs, urlencode, quote, unquote
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -66,6 +68,7 @@ SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 # config/.env 位于 codex 脚本根目录，即 new/ 的上一级的 config/ 目录
 _CODEX_ROOT = os.path.dirname(SCRIPTS_DIR)  # codex/ 目录
 _ENV_FILE = os.path.join(_CODEX_ROOT, "config", ".env")
+_LOCAL_ENV_FILE = os.path.join(SCRIPTS_DIR, ".env")
 
 
 def _try_load_env(fp):
@@ -90,6 +93,8 @@ def _try_load_env(fp):
         pass
 
 
+# 优先加载当前目录 .env，再兼容历史上级 config/.env
+_try_load_env(_LOCAL_ENV_FILE)
 _try_load_env(_ENV_FILE)
 
 
@@ -109,6 +114,11 @@ TOTAL_ACCOUNTS = _config.get("total_accounts", 30)
 CONCURRENT_WORKERS = _config.get("concurrent_workers", 1)  # 并发数（默认串行）
 HEADLESS = _config.get("headless", False)  # 是否无头模式运行浏览器
 PROXY = _config.get("proxy", "")
+WORKSPACE_RECORD_WORKERS = max(1, int(_config.get("workspace_record_workers", 4)))
+OAUTH_STEP2_MAX_RETRIES = max(1, int(_config.get("oauth_step2_max_retries", 5)))
+OAUTH_STEP2_RETRY_BASE_SECONDS = max(0.5, float(_config.get("oauth_step2_retry_base_seconds", 2.0)))
+SPACE_RECORD_FILE = _config.get("space_record_file", "space_record_status.json")
+ACCOUNT_RECORD_WORKERS = max(1, int(_config.get("account_record_workers", 3)))
 
 # 邮箱配置
 CF_WORKER_DOMAIN = _config.get("cf_worker_domain", "email.tuxixilax.cfd")
@@ -120,9 +130,22 @@ OAUTH_ISSUER = _config.get("oauth_issuer", "https://auth.openai.com")
 OAUTH_CLIENT_ID = _config.get("oauth_client_id", "app_EMoamEEZ73f0CkXaXp7hrann")
 OAUTH_REDIRECT_URI = _config.get("oauth_redirect_uri", "http://localhost:1455/auth/callback")
 
-# codex-server 后端配置（从 config/.env 读取 SERVER_BASE / ADMIN_AUTH）
-SERVER_BASE = os.environ.get("SERVER_BASE", "").rstrip("/")
-ADMIN_AUTH = os.environ.get("ADMIN_AUTH", "")
+# codex-server 后端配置（默认对接本机 3500）
+SERVER_BASE = (
+    os.environ.get("SERVER_BASE")
+    or _config.get("server_base", "http://127.0.0.1:3500")
+).rstrip("/")
+ADMIN_AUTH = os.environ.get("ADMIN_AUTH", _config.get("admin_auth", ""))
+
+# aifun 邮箱配置
+AIFUN_BASE = (
+    os.environ.get("MUHAO_AIFUN_BASE")
+    or os.environ.get("AIFUN_BASE", "https://aifun.edu.kg/api")
+).strip().rstrip("/")
+AIFUN_AUTH = (
+    os.environ.get("MUHAO_AIFUN_AUTH")
+    or os.environ.get("AIFUN_AUTH", "")
+).strip()
 
 # 输出文件
 ACCOUNTS_FILE = _config.get("accounts_file", "accounts.txt")
@@ -132,6 +155,7 @@ RK_FILE = _config.get("rk_file", "rk.txt")
 
 # 并发文件写入锁（多线程共享文件时防止数据竞争）
 _file_lock = threading.Lock()
+_space_record_lock = threading.Lock()
 
 # OpenAI 认证域名
 OPENAI_AUTH_BASE = "https://auth.openai.com"
@@ -623,6 +647,256 @@ def wait_for_verification_code(session, email, cf_token, timeout=120):
     return None
 
 
+# =================== Aifun 邮箱客户端 ===================
+
+class AifunMailClient:
+    """通过 aifun 邮箱 API 拉取指定邮箱验证码。"""
+
+    CODE_PATTERN = re.compile(r"(?<!\d)(\d{6})(?!\d)")
+    EMAIL_PATTERN = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.I)
+
+    def __init__(self, email):
+        self.email = (email or "").strip().lower()
+        self.base = (AIFUN_BASE or "").strip().rstrip("/")
+        self.account_id = ""
+        self._recent_otp = None
+
+        if not self.base:
+            raise ValueError("未配置 AIFUN_BASE / MUHAO_AIFUN_BASE")
+        if not AIFUN_AUTH:
+            raise ValueError("未配置 AIFUN_AUTH / MUHAO_AIFUN_AUTH")
+
+        self.session = create_session()
+        self.session.headers.update({
+            "accept": "application/json, text/plain, */*",
+            "accept-language": "zh",
+            "authorization": AIFUN_AUTH,
+            "cache-control": "no-cache",
+            "pragma": "no-cache",
+            "referer": "https://aifun.edu.kg/inbox",
+            "user-agent": USER_AGENT,
+        })
+
+        account_id = self._resolve_account_id_by_email(self.email)
+        if not account_id:
+            raise ValueError(f"未找到邮箱 {self.email} 对应的 aifun accountId")
+        self.account_id = account_id
+        print(f"  📧 aifun 邮箱客户端已初始化: {self.email}")
+        print(f"  📮 aifun accountId: {self.account_id}")
+
+    def _resolve_account_id_by_email(self, email):
+        target = (email or "").strip().lower()
+        if not target:
+            return None
+
+        cursor = 0
+        page_size = 100
+        seen_ids = set()
+
+        while True:
+            resp = self.session.get(
+                f"{self.base}/account/list",
+                params={"accountId": cursor, "size": page_size},
+                timeout=20,
+            )
+            resp.raise_for_status()
+            data = resp.json() if resp.content else {}
+            items = data.get("data") if isinstance(data, dict) else None
+            if not isinstance(items, list) or not items:
+                return None
+
+            for item in items:
+                item_email = str(item.get("email") or "").strip().lower()
+                item_account_id = str(item.get("accountId") or item.get("id") or "").strip()
+                if item_email == target and item_account_id:
+                    return item_account_id
+
+            last_item = items[-1]
+            next_cursor = str(last_item.get("accountId") or last_item.get("id") or "").strip()
+            if not next_cursor or next_cursor in seen_ids:
+                return None
+            seen_ids.add(next_cursor)
+            try:
+                if int(next_cursor) <= int(cursor):
+                    return None
+            except Exception:
+                return None
+            cursor = int(next_cursor)
+
+    def fetch_latest(self, email_id=0):
+        try:
+            resp = self.session.get(
+                f"{self.base}/email/latest",
+                params={"emailId": int(email_id), "accountId": self.account_id},
+                timeout=20,
+            )
+            resp.raise_for_status()
+            data = resp.json() if resp.content else {}
+            if not isinstance(data, dict) or int(data.get("code", 0)) != 200:
+                return []
+            items = data.get("data") or []
+            return items if isinstance(items, list) else []
+        except Exception:
+            return []
+
+    def fetch_latest_mail_id(self):
+        ids = []
+        for item in self.fetch_latest(email_id=0):
+            try:
+                ids.append(int(item.get("emailId") or 0))
+            except (TypeError, ValueError):
+                continue
+        return max(ids) if ids else 0
+
+    @staticmethod
+    def _match_recipient(item, expected):
+        def contains_expected(value):
+            if value is None:
+                return False
+            text = str(value).strip().lower()
+            if text == expected:
+                return True
+            for addr in AifunMailClient.EMAIL_PATTERN.findall(text):
+                if addr.strip().lower() == expected:
+                    return True
+            return False
+
+        to_email = (item.get("toEmail") or "").strip().lower()
+        if to_email and to_email == expected:
+            return True
+
+        recipient_raw = item.get("recipient")
+        if recipient_raw:
+            if contains_expected(recipient_raw):
+                return True
+            try:
+                parsed = json.loads(recipient_raw) if isinstance(recipient_raw, str) else recipient_raw
+            except Exception:
+                parsed = None
+            if isinstance(parsed, list):
+                for rec in parsed:
+                    addr = (rec or {}).get("address")
+                    if contains_expected(addr):
+                        return True
+            elif isinstance(parsed, dict):
+                for value in parsed.values():
+                    if contains_expected(value):
+                        return True
+
+        header_to = (item.get("headerTo") or "").strip().lower()
+        if header_to and contains_expected(header_to):
+            return True
+
+        subject = (item.get("subject") or "").lower()
+        return expected in subject
+
+    @staticmethod
+    def _looks_like_openai_otp_mail(mail):
+        fields = []
+        for key in ("subject", "text", "content", "html", "raw", "source", "fromEmail"):
+            value = mail.get(key)
+            if value is not None:
+                fields.append(str(value).lower())
+        joined = "\n".join(fields)
+
+        negative_keywords = [
+            "invited you to chatgpt business",
+            "chatgpt business",
+            "neo has invited you",
+            "invite code",
+        ]
+        for keyword in negative_keywords:
+            if keyword in joined:
+                return False
+
+        positive_keywords = [
+            "your chatgpt code is",
+            "verification code",
+            "email verification code",
+            "chatgpt code",
+            "openai",
+        ]
+        return any(keyword in joined for keyword in positive_keywords)
+
+    @classmethod
+    def _extract_otp(cls, mail):
+        if not cls._looks_like_openai_otp_mail(mail):
+            return None
+        for field in ("subject", "text", "content", "html", "raw"):
+            content = str(mail.get(field, ""))
+            match = cls.CODE_PATTERN.search(content)
+            if match:
+                return match.group(1)
+        return None
+
+    @staticmethod
+    def _extract_create_time_ms(item):
+        raw = item.get("createTime")
+        if raw in (None, ""):
+            return None
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            return None
+        if value > 10**12:
+            return value
+        if value > 10**9:
+            return value * 1000
+        return None
+
+    def fetch_otp_candidates(self, expected_to, min_create_time_ms=None, since_email_id=0):
+        expected = (expected_to or "").strip().lower()
+        items = self.fetch_latest(email_id=since_email_id)
+        candidates = []
+        seen_codes = set()
+
+        for item in items:
+            if not self._match_recipient(item, expected):
+                continue
+
+            created_ms = self._extract_create_time_ms(item)
+            if min_create_time_ms and created_ms and created_ms < min_create_time_ms:
+                continue
+
+            code = self._extract_otp(item)
+            if not code or code in seen_codes:
+                continue
+
+            seen_codes.add(code)
+            try:
+                email_id = int(item.get("emailId") or 0)
+            except (TypeError, ValueError):
+                email_id = 0
+
+            candidates.append({
+                "email_id": email_id,
+                "code": code,
+                "subject": (item.get("subject") or "")[:80],
+                "create_time_ms": created_ms,
+            })
+
+        candidates.sort(key=lambda x: (x["email_id"], x["create_time_ms"] or 0), reverse=True)
+        return candidates
+
+    def remember_otp(self, code, email_id=0):
+        if not code:
+            return
+        self._recent_otp = {
+            "code": str(code).strip(),
+            "email_id": int(email_id or 0),
+            "saved_at": time.time(),
+        }
+
+    def get_recent_otp(self, max_age_seconds=120):
+        item = self._recent_otp
+        if not item:
+            return None
+        if time.time() - float(item.get("saved_at", 0)) > max_age_seconds:
+            self._recent_otp = None
+            return None
+        return dict(item)
+
+
 # =================== 协议注册核心流程（纯 HTTP，零浏览器） ===================
 
 class ProtocolRegistrar:
@@ -989,6 +1263,82 @@ class ProtocolRegistrar:
             return False, email, password
 
 
+def register_account_with_aifun(email, password, mail_client=None):
+    """使用 aifun 邮箱接码执行协议注册。"""
+    print(f"\n📝 开始协议注册: {email}")
+    print(f"   密码: {password}")
+
+    registrar = ProtocolRegistrar()
+    if not registrar.step0_init_oauth_session(email):
+        print("❌ 步骤0失败：OAuth 会话初始化失败")
+        return False
+
+    time.sleep(1)
+    if not registrar.step2_register_user(email, password):
+        print("❌ 步骤2失败：用户注册失败")
+        return False
+
+    time.sleep(1)
+    if mail_client:
+        try:
+            baseline_email_id = mail_client.fetch_latest_mail_id()
+        except Exception:
+            baseline_email_id = 0
+    else:
+        baseline_email_id = 0
+
+    registrar.step3_send_otp()
+
+    if not mail_client:
+        print("❌ 未配置 aifun 邮箱客户端")
+        return False
+
+    print("  ⏳ 等待 aifun 验证码...")
+    wait_start = time.time()
+    start_ms = int(time.time() * 1000)
+    deadline = time.time() + 120
+    last_tried_email_id = 0
+    validated = False
+
+    time.sleep(6)
+
+    while time.time() < deadline and not validated:
+        use_since_id = baseline_email_id if (time.time() - wait_start < 30 and baseline_email_id > 0) else 0
+        candidates = mail_client.fetch_otp_candidates(
+            expected_to=email,
+            min_create_time_ms=start_ms - 5000,
+            since_email_id=use_since_id,
+        )
+        if candidates:
+            print(f"  📬 找到 {len(candidates)} 个验证码候选")
+
+        if candidates:
+            candidate = candidates[0]
+            if candidate["email_id"] > last_tried_email_id:
+                last_tried_email_id = candidate["email_id"]
+                code = candidate["code"]
+                print(f"  🔢 尝试验证码: {code} (emailId={candidate['email_id']}, sub={candidate['subject']})")
+                if registrar.step4_validate_otp(code):
+                    mail_client.remember_otp(code, candidate["email_id"])
+                    validated = True
+
+        if not validated:
+            time.sleep(3)
+
+    if not validated:
+        print("❌ 未收到可用验证码")
+        return False
+
+    time.sleep(1)
+    first_name, last_name = generate_random_name()
+    birthdate = generate_random_birthday()
+    if not registrar.step5_create_account(first_name, last_name, birthdate):
+        return False
+
+    print("\n🎉 注册成功！")
+    return True
+
+
 # =================== Sentinel API（纯 HTTP 获取 c 字段） ===================
 
 
@@ -1085,7 +1435,73 @@ def build_sentinel_token(session, device_id, flow="authorize_continue"):
     return sentinel_token
 
 
-def perform_codex_oauth_login_http(email, password, registrar_session=None, cf_token=None):
+def _parse_retry_after_seconds(resp, default_seconds):
+    try:
+        raw = (resp.headers or {}).get("Retry-After")
+    except Exception:
+        raw = None
+    if not raw:
+        return float(default_seconds)
+    try:
+        val = float(str(raw).strip())
+        if val >= 0:
+            return val
+    except Exception:
+        pass
+    return float(default_seconds)
+
+
+def _post_authorize_continue_with_retry(session, device_id, email):
+    url = f"{OAUTH_ISSUER}/api/accounts/authorize/continue"
+    resp = None
+    for attempt in range(1, OAUTH_STEP2_MAX_RETRIES + 1):
+        headers = dict(COMMON_HEADERS)
+        headers["referer"] = f"{OAUTH_ISSUER}/log-in"
+        headers["oai-device-id"] = device_id
+        headers.update(generate_datadog_trace())
+
+        sentinel_email = build_sentinel_token(session, device_id, flow="authorize_continue")
+        if not sentinel_email:
+            print("  ❌ 无法获取 authorize_continue 的 sentinel token")
+            return None
+        headers["openai-sentinel-token"] = sentinel_email
+
+        try:
+            resp = session.post(
+                url,
+                json={"username": {"kind": "email", "value": email}},
+                headers=headers,
+                verify=False,
+                timeout=30,
+            )
+            print(f"  步骤2: {resp.status_code} (尝试 {attempt}/{OAUTH_STEP2_MAX_RETRIES})")
+        except Exception as e:
+            print(f"  ⚠️ 步骤2请求异常 (尝试 {attempt}/{OAUTH_STEP2_MAX_RETRIES}): {e}")
+            if attempt >= OAUTH_STEP2_MAX_RETRIES:
+                return None
+            sleep_s = OAUTH_STEP2_RETRY_BASE_SECONDS * (2 ** (attempt - 1))
+            time.sleep(min(20.0, sleep_s))
+            continue
+
+        if resp.status_code == 200:
+            return resp
+
+        if resp.status_code == 429 and attempt < OAUTH_STEP2_MAX_RETRIES:
+            retry_after = _parse_retry_after_seconds(
+                resp,
+                OAUTH_STEP2_RETRY_BASE_SECONDS * (2 ** (attempt - 1)),
+            )
+            retry_after = min(30.0, max(0.5, retry_after))
+            print(f"  ⚠️ 步骤2触发 429，{retry_after:.1f}s 后重试...")
+            time.sleep(retry_after)
+            continue
+
+        return resp
+
+    return resp
+
+
+def perform_codex_oauth_login_http(email, password, registrar_session=None, cf_token=None, mail_client=None, prepare_only=False):
     """
     纯 HTTP 方式执行 Codex OAuth 登录获取 Token（零浏览器）。
 
@@ -1101,8 +1517,10 @@ def perform_codex_oauth_login_http(email, password, registrar_session=None, cf_t
         password: 登录密码
         registrar_session: 注册时的 session（可选，本模式未使用）
         cf_token: 邮箱 JWT token（用于接收 OTP 验证码，新注册账号首次登录时需要）
+        mail_client: AifunMailClient 实例（可选，优先用于邮箱 OTP）
+        prepare_only: True 时仅完成 OAuth 前置步骤并返回会话信息，不执行 token 交换
     返回:
-        dict: tokens 字典（含 access_token/refresh_token/id_token），失败返回 None
+        dict: 默认返回 tokens；prepare_only=True 时返回会话准备数据
     """
     print("\n🔐 执行 Codex OAuth 登录（纯 HTTP 模式）...")
 
@@ -1148,35 +1566,13 @@ def perform_codex_oauth_login_http(email, password, registrar_session=None, cf_t
         print("  ⚠️ 未获得 login_session")
 
     # ===== 步骤2: POST authorize/continue =====
-
-    # 构造请求头（参考 test_oauth_quick.py）
-    headers = dict(COMMON_HEADERS)
-    headers["referer"] = f"{OAUTH_ISSUER}/log-in"
-    headers["oai-device-id"] = device_id
-    headers.update(generate_datadog_trace())
-
-    # 获取 authorize_continue 的 sentinel token
-    sentinel_email = build_sentinel_token(session, device_id, flow="authorize_continue")
-    if not sentinel_email:
-        print("  ❌ 无法获取 authorize_continue 的 sentinel token")
-        return None
-    headers["openai-sentinel-token"] = sentinel_email
-
-    try:
-        resp = session.post(
-            f"{OAUTH_ISSUER}/api/accounts/authorize/continue",
-            json={"username": {"kind": "email", "value": email}},
-            headers=headers,
-            verify=False,
-            timeout=30,
-        )
-        print(f"  步骤2: {resp.status_code}")
-    except Exception as e:
-        print(f"  ❌ 邮箱提交失败: {e}")
+    resp = _post_authorize_continue_with_retry(session, device_id, email)
+    if resp is None:
+        print("  ❌ 邮箱提交失败")
         return None
 
     if resp.status_code != 200:
-        print("  ❌ 邮箱提交失败")
+        print(f"  ❌ 邮箱提交失败: {resp.status_code} -> {resp.text[:180]}")
         return None
 
     try:
@@ -1187,7 +1583,9 @@ def perform_codex_oauth_login_http(email, password, registrar_session=None, cf_t
 
     # ===== 步骤3: POST password/verify =====
 
+    headers = dict(COMMON_HEADERS)
     headers["referer"] = f"{OAUTH_ISSUER}/log-in/password"
+    headers["oai-device-id"] = device_id
     headers.update(generate_datadog_trace())
 
     # 获取 password_verify 的 sentinel token（每个 flow 需要独立的 token）
@@ -1212,6 +1610,10 @@ def perform_codex_oauth_login_http(email, password, registrar_session=None, cf_t
         return None
 
     if resp.status_code != 200:
+        resp_text = resp.text or ""
+        if resp.status_code == 403 and "deleted or deactivated" in resp_text:
+            print(f"  🚫 账号已被封禁/停用: {resp_text[:160]}")
+            return "ACCOUNT_BANNED"
         print("  ❌ 密码验证失败")
         return None
 
@@ -1230,53 +1632,17 @@ def perform_codex_oauth_login_http(email, password, registrar_session=None, cf_t
     # ===== 步骤3.5: 邮箱验证（新注册账号首次登录时可能触发） =====
     if page_type == "email_otp_verification" or "email-verification" in continue_url:
         print("\n  --- [步骤3.5] 邮箱验证（新注册账号首次登录） ---")
-
-        if not cf_token:
-            print("  ❌ 无 cf_token，无法接收验证码")
-            return None
-
-        mail_session = create_session()
-
-        # 关键认知：当 password/verify 返回 email_otp_verification 时，
-        # 服务端已经自动发送了 OTP 邮件！立即开始轮询检查。
-
-        # 记录初始邮件数量（注册阶段的）
-        initial_emails = fetch_emails(mail_session, email, cf_token)
-        initial_count = len(initial_emails) if initial_emails else 0
-
-        # 轮询等待邮件到达，收集所有验证码并依次尝试
-        print(f"  ⏳ 开始监视邮箱（当前 {initial_count} 封）...")
-        code = None
-        tried_codes = set()  # 已尝试过的验证码，避免重复提交
-        start_time = time.time()
-
         h_val = dict(COMMON_HEADERS)
         h_val["referer"] = f"{OAUTH_ISSUER}/email-verification"
         h_val["oai-device-id"] = device_id
         h_val.update(generate_datadog_trace())
 
-        while time.time() - start_time < 120:
-            all_emails = fetch_emails(mail_session, email, cf_token)
-            if not all_emails:
-                time.sleep(2)
-                continue
-
-            # 收集所有唯一验证码（保持顺序，API 最新在前）
-            all_codes = []
-            for e_item in all_emails:
-                if isinstance(e_item, dict):
-                    c = extract_verification_code(e_item.get("raw", ""))
-                    if c and c not in tried_codes:
-                        all_codes.append(c)
-
-            if not all_codes:
-                time.sleep(2)
-                continue
-
-            # 依次尝试每个未试过的验证码
-            for try_code in all_codes:
-                tried_codes.add(try_code)
-                print(f"  🔢 尝试验证码: {try_code}")
+        code = None
+        if mail_client:
+            recent_otp = mail_client.get_recent_otp(max_age_seconds=120)
+            if recent_otp:
+                try_code = recent_otp.get("code")
+                print(f"  ♻️ 复用最近验证码: {try_code} (emailId={recent_otp.get('email_id', 0)})")
                 resp = session.post(
                     f"{OAUTH_ISSUER}/api/accounts/email-otp/validate",
                     json={"code": try_code},
@@ -1284,22 +1650,128 @@ def perform_codex_oauth_login_http(email, password, registrar_session=None, cf_t
                 )
                 if resp.status_code == 200:
                     code = try_code
-                    print(f"  ✅ 验证码 {code} 验证通过！")
                     try:
                         data = resp.json()
                         continue_url = data.get("continue_url", "")
                         page_type = data.get("page", {}).get("type", "")
-                        print(f"  continue_url: {continue_url}")
-                        print(f"  page.type: {page_type}")
                     except Exception:
                         pass
-                    break
                 else:
+                    print(f"  ⚠️ 复用验证码失败: {resp.status_code} -> {resp.text[:160]}")
+                    if resp.status_code == 403 and "deleted or deactivated" in (resp.text or ""):
+                        print(f"  🚫 账号已被封禁/停用，终止登录")
+                        return "ACCOUNT_BANNED"
+
+            if not code:
+                try:
+                    baseline_email_id = mail_client.fetch_latest_mail_id()
+                except Exception:
+                    baseline_email_id = 0
+
+                print("  ⏳ 等待 aifun 验证码...")
+                wait_start = time.time()
+                start_ms = int(time.time() * 1000)
+                deadline = time.time() + 120
+                tried_otp_keys = set()
+
+                time.sleep(6)
+                while time.time() < deadline and not code:
+                    use_since_id = baseline_email_id if (time.time() - wait_start < 30 and baseline_email_id > 0) else 0
+                    candidates = mail_client.fetch_otp_candidates(
+                        expected_to=email,
+                        min_create_time_ms=start_ms - 5000,
+                        since_email_id=use_since_id,
+                    )
+                    if candidates:
+                        print(f"  📬 找到 {len(candidates)} 个验证码候选")
+                        for candidate in candidates:
+                            try_code = candidate.get("code")
+                            email_id = int(candidate.get("email_id") or 0)
+                            key = (email_id, str(try_code or ""))
+                            if not try_code or key in tried_otp_keys:
+                                continue
+
+                            tried_otp_keys.add(key)
+                            print(f"  🔢 尝试验证码: {try_code} (emailId={email_id}, sub={candidate.get('subject', '')})")
+                            resp = session.post(
+                                f"{OAUTH_ISSUER}/api/accounts/email-otp/validate",
+                                json={"code": try_code},
+                                headers=h_val, verify=False, timeout=30,
+                            )
+                            if resp.status_code == 200:
+                                code = try_code
+                                mail_client.remember_otp(code, email_id)
+                                try:
+                                    data = resp.json()
+                                    continue_url = data.get("continue_url", "")
+                                    page_type = data.get("page", {}).get("type", "")
+                                except Exception:
+                                    pass
+                                break
+
+                            print(f"  ⚠️ 验证码失败: {resp.status_code} -> {resp.text[:160]}")
+                            if resp.status_code == 403 and "deleted or deactivated" in (resp.text or ""):
+                                print(f"  🚫 账号已被封禁/停用，终止登录")
+                                return "ACCOUNT_BANNED"
+                            if "max_check_attempts" in (resp.text or ""):
+                                print("  ❌ OTP 尝试次数达到上限，终止当前会话")
+                                return None
+                    if not code:
+                        time.sleep(3)
+
+        elif cf_token:
+            mail_session = create_session()
+            initial_emails = fetch_emails(mail_session, email, cf_token)
+            initial_count = len(initial_emails) if initial_emails else 0
+            print(f"  ⏳ 开始监视邮箱（当前 {initial_count} 封）...")
+
+            tried_codes = set()
+            start_time = time.time()
+            while time.time() - start_time < 120:
+                all_emails = fetch_emails(mail_session, email, cf_token)
+                if not all_emails:
+                    time.sleep(2)
+                    continue
+
+                all_codes = []
+                for e_item in all_emails:
+                    if isinstance(e_item, dict):
+                        c = extract_verification_code(e_item.get("raw", ""))
+                        if c and c not in tried_codes:
+                            all_codes.append(c)
+
+                if not all_codes:
+                    time.sleep(2)
+                    continue
+
+                for try_code in all_codes:
+                    tried_codes.add(try_code)
+                    print(f"  🔢 尝试验证码: {try_code}")
+                    resp = session.post(
+                        f"{OAUTH_ISSUER}/api/accounts/email-otp/validate",
+                        json={"code": try_code},
+                        headers=h_val, verify=False, timeout=30,
+                    )
+                    if resp.status_code == 200:
+                        code = try_code
+                        print(f"  ✅ 验证码 {code} 验证通过！")
+                        try:
+                            data = resp.json()
+                            continue_url = data.get("continue_url", "")
+                            page_type = data.get("page", {}).get("type", "")
+                            print(f"  continue_url: {continue_url}")
+                            print(f"  page.type: {page_type}")
+                        except Exception:
+                            pass
+                        break
                     print(f"  ❌ 验证码 {try_code} 失败: {resp.status_code}")
 
-            if code:
-                break
-            time.sleep(2)
+                if code:
+                    break
+                time.sleep(2)
+        else:
+            print("  ❌ 未提供 aifun 邮箱客户端或 cf_token，无法处理邮箱验证")
+            return None
 
         if not code:
             print("  ❌ 验证码等待超时")
@@ -1365,6 +1837,19 @@ def perform_codex_oauth_login_http(email, password, registrar_session=None, cf_t
         if not continue_url or "email-verification" in continue_url:
             print("  ❌ 邮箱验证后未获取到 consent URL")
             return None
+
+    # prepare_only 模式：仅准备会话和 consent URL，供“遍历全部空间”流程复用
+    if prepare_only:
+        if continue_url.startswith("/"):
+            consent_url = f"{OAUTH_ISSUER}{continue_url}"
+        else:
+            consent_url = continue_url
+        return {
+            "session": session,
+            "device_id": device_id,
+            "code_verifier": code_verifier,
+            "consent_url": consent_url,
+        }
 
     # ===== 步骤4: consent 多步流程 → 提取 authorization code → 换 token =====
     #
@@ -2021,6 +2506,511 @@ def codex_exchange_code(code, code_verifier):
         return None
 
 
+def _extract_code_from_url(url):
+    if not url or "code=" not in url:
+        return None
+    try:
+        return parse_qs(urlparse(url).query).get("code", [None])[0]
+    except Exception:
+        return None
+
+
+def _follow_and_extract_code(session_obj, url, max_depth=10):
+    if max_depth <= 0 or not url:
+        return None
+    try:
+        resp = session_obj.get(
+            url,
+            headers=NAVIGATE_HEADERS,
+            verify=False,
+            timeout=15,
+            allow_redirects=False,
+        )
+        if resp.status_code in (301, 302, 303, 307, 308):
+            location = resp.headers.get("Location", "")
+            code = _extract_code_from_url(location)
+            if code:
+                return code
+            if location.startswith("/"):
+                location = f"{OAUTH_ISSUER}{location}"
+            return _follow_and_extract_code(session_obj, location, max_depth - 1)
+        if resp.status_code == 200:
+            return _extract_code_from_url(resp.url)
+    except requests.exceptions.ConnectionError as e:
+        url_match = re.search(r'(https?://localhost[^\s\'"]+)', str(e))
+        if url_match:
+            return _extract_code_from_url(url_match.group(1))
+    except Exception:
+        return None
+    return None
+
+
+def _decode_auth_session_for_workspaces(session_obj):
+    def _try_parse_json(raw_bytes):
+        try:
+            return json.loads(raw_bytes.decode("utf-8"))
+        except Exception:
+            return None
+
+    def _decode_segment(segment):
+        if not segment:
+            return None
+        padded = segment + ("=" * ((4 - len(segment) % 4) % 4))
+        try:
+            raw = base64.urlsafe_b64decode(padded)
+        except Exception:
+            return None
+
+        parsed = _try_parse_json(raw)
+        if isinstance(parsed, dict):
+            return parsed
+
+        try:
+            unzipped = zlib.decompress(raw)
+        except Exception:
+            unzipped = None
+        if unzipped is not None:
+            parsed = _try_parse_json(unzipped)
+            if isinstance(parsed, dict):
+                return parsed
+        return None
+
+    cookies = []
+    for cookie in session_obj.cookies:
+        if cookie.name != "oai-client-auth-session":
+            continue
+        domain = (cookie.domain or "").lower()
+        path = cookie.path or ""
+        value = str(cookie.value or "")
+        cookies.append((domain, path, value))
+
+    if not cookies:
+        return None
+
+    cookies.sort(key=lambda item: (0 if "auth.openai.com" in item[0] else 1, -len(item[1])))
+
+    for _domain, _path, raw_value in cookies:
+        value = unquote(raw_value.strip().strip('"').strip("'"))
+        parts = value.split(".")
+        segments = []
+        if value.startswith(".") and len(parts) > 1:
+            segments.append(parts[1])
+        elif parts:
+            segments.append(parts[0])
+        for part in parts:
+            if part and part not in segments:
+                segments.append(part)
+
+        for segment in segments:
+            parsed = _decode_segment(segment)
+            if isinstance(parsed, dict):
+                return parsed
+    return None
+
+
+def _extract_workspaces_from_session_data(session_data):
+    if not isinstance(session_data, dict):
+        return []
+
+    candidates = [
+        session_data.get("workspaces"),
+        session_data.get("available_workspaces"),
+        session_data.get("availableWorkspaces"),
+    ]
+    nested = session_data.get("data")
+    if isinstance(nested, dict):
+        candidates.extend([
+            nested.get("workspaces"),
+            nested.get("available_workspaces"),
+            nested.get("availableWorkspaces"),
+        ])
+
+    for item in candidates:
+        if isinstance(item, list):
+            return [x for x in item if isinstance(x, dict)]
+        if isinstance(item, dict):
+            values = [x for x in item.values() if isinstance(x, dict)]
+            if values:
+                return values
+    return []
+
+
+def perform_codex_oauth_login_http_all_spaces(
+    email,
+    password,
+    registrar_session=None,
+    cf_token=None,
+    mail_client=None,
+    on_result=None,
+    status_out=None,
+):
+    """
+    在同一 OAuth 登录会话中遍历所有 workspace/org/project，返回全部 token。
+    返回: [{"workspace","org","project","tokens"}, ...]
+    """
+    print("\n🔐 执行 Codex OAuth 登录（全空间遍历）...")
+
+    prep = perform_codex_oauth_login_http(
+        email=email,
+        password=password,
+        registrar_session=registrar_session,
+        cf_token=cf_token,
+        mail_client=mail_client,
+        prepare_only=True,
+    )
+    if prep == "ACCOUNT_BANNED":
+        print("  🚫 账号已被封禁/停用，跳过所有空间遍历")
+        if isinstance(status_out, dict):
+            status_out["account_banned"] = True
+        return []
+    if not prep:
+        if isinstance(status_out, dict):
+            status_out["prepare_failed"] = True
+        return []
+
+    session_data = _decode_auth_session_for_workspaces(prep["session"])
+    workspaces = _extract_workspaces_from_session_data(session_data)
+    if isinstance(status_out, dict):
+        status_out["workspace_total"] = len(workspaces)
+    if not workspaces:
+        print("  ⚠️ 未发现 workspace，回退单空间登录")
+        single = perform_codex_oauth_login_http(
+            email=email,
+            password=password,
+            registrar_session=registrar_session,
+            cf_token=cf_token,
+            mail_client=mail_client,
+        )
+        if single and single != "ACCOUNT_BANNED":
+            if isinstance(status_out, dict):
+                status_out["fallback_single"] = True
+            return [{
+                "workspace": "default",
+                "org": "default",
+                "project": None,
+                "workspace_id": "default",
+                "org_id": "default",
+                "project_id": None,
+                "tokens": single,
+            }]
+        return []
+
+    print(f"  📋 检测到 {len(workspaces)} 个 workspace，开始比对录入状态")
+    for ws_index, workspace in enumerate(workspaces):
+        wid = workspace.get("id")
+        wname = workspace.get("name") or workspace.get("title") or f"workspace-{ws_index}"
+        done = _workspace_recorded_all(email, wid)
+        mark = "已录过" if done else "待处理"
+        print(f"    [{ws_index}] id={wid} name={wname} -> {mark}")
+
+    print("  🚀 开始遍历未录入 workspace")
+    all_results = []
+    seen_access_tokens = set()
+
+    def _save_result(tokens, workspace_name, org_name, project_name, workspace_id=None, org_id=None, project_id=None):
+        if not tokens:
+            return
+        access_token = (tokens or {}).get("access_token", "")
+        if access_token and access_token in seen_access_tokens:
+            return
+        if access_token:
+            seen_access_tokens.add(access_token)
+        item = {
+            "workspace": workspace_name,
+            "org": org_name,
+            "project": project_name,
+            "workspace_id": workspace_id,
+            "org_id": org_id,
+            "project_id": project_id,
+            "tokens": tokens,
+        }
+        all_results.append(item)
+        if callable(on_result):
+            try:
+                on_result(item)
+            except Exception as e:
+                print(f"  ⚠️ on_result 回调异常: {e}")
+
+    def _run_workspace_flow(workspace, ws_index, prep_ctx):
+        session = prep_ctx["session"]
+        device_id = prep_ctx["device_id"]
+        code_verifier = prep_ctx["code_verifier"]
+        consent_url = prep_ctx["consent_url"]
+
+        workspace_id = workspace.get("id")
+        workspace_name = workspace.get("name") or workspace.get("title") or f"workspace-{ws_index}"
+        if not workspace_id:
+            return
+
+        def _mark_failed(org_name="default", project_name=None, org_id="default", project_id=None, detail=""):
+            _update_space_record(
+                email,
+                {
+                    "workspace": workspace_name,
+                    "workspace_id": workspace_id,
+                    "org": org_name,
+                    "org_id": org_id,
+                    "project": project_name,
+                    "project_id": project_id,
+                },
+                "failed",
+                detail,
+            )
+
+        try:
+            resp = session.get(
+                consent_url,
+                headers=NAVIGATE_HEADERS,
+                verify=False,
+                timeout=30,
+                allow_redirects=False,
+            )
+            if resp.status_code in (301, 302, 303, 307, 308):
+                code = _extract_code_from_url(resp.headers.get("Location", ""))
+                if code:
+                    tokens = codex_exchange_code(code, code_verifier)
+                    _save_result(tokens, workspace_name, "default", None, workspace_id=workspace_id, org_id="default", project_id=None)
+                    return
+        except requests.exceptions.ConnectionError as e:
+            url_match = re.search(r'(https?://localhost[^\s\'"]+)', str(e))
+            if url_match:
+                code = _extract_code_from_url(url_match.group(1))
+                if code:
+                    tokens = codex_exchange_code(code, code_verifier)
+                    _save_result(tokens, workspace_name, "default", None, workspace_id=workspace_id, org_id="default", project_id=None)
+                    return
+        except Exception:
+            pass
+
+        h_ws = dict(COMMON_HEADERS)
+        h_ws["referer"] = consent_url
+        h_ws["oai-device-id"] = device_id
+        h_ws.update(generate_datadog_trace())
+
+        try:
+            resp_ws = session.post(
+                f"{OAUTH_ISSUER}/api/accounts/workspace/select",
+                json={"workspace_id": workspace_id},
+                headers=h_ws,
+                verify=False,
+                timeout=30,
+                allow_redirects=False,
+            )
+        except Exception as e:
+            print(f"  ❌ workspace/select 异常: {workspace_name} -> {e}")
+            _mark_failed(detail=f"workspace_select_exception:{e}")
+            _update_workspace_status(email, workspace_id, workspace_name, "failed", f"workspace_select_exception:{e}")
+            return
+
+        if resp_ws.status_code in (301, 302, 303, 307, 308):
+            location = resp_ws.headers.get("Location", "")
+            code = _extract_code_from_url(location) or _follow_and_extract_code(session, location)
+            tokens = codex_exchange_code(code, code_verifier) if code else None
+            _save_result(tokens, workspace_name, "default", None, workspace_id=workspace_id, org_id="default", project_id=None)
+            return
+
+        if resp_ws.status_code == 409:
+            print(f"  ⚠️ workspace/select 冲突: {workspace_name} -> 409 {resp_ws.text[:180]}")
+            _mark_failed(detail=f"workspace_select_409:{resp_ws.text[:120]}")
+            _update_workspace_status(email, workspace_id, workspace_name, "failed", f"workspace_select_409:{resp_ws.text[:120]}")
+            return
+
+        if resp_ws.status_code != 200:
+            print(f"  ❌ workspace/select 失败: {workspace_name} -> {resp_ws.status_code}")
+            _mark_failed(detail=f"workspace_select_{resp_ws.status_code}")
+            _update_workspace_status(email, workspace_id, workspace_name, "failed", f"workspace_select_{resp_ws.status_code}")
+            return
+
+        try:
+            ws_data = resp_ws.json()
+        except Exception:
+            ws_data = {}
+
+        ws_next = ws_data.get("continue_url", "")
+        orgs = ws_data.get("data", {}).get("orgs", [])
+
+        if not orgs:
+            if ws_next:
+                full_next = ws_next if ws_next.startswith("http") else f"{OAUTH_ISSUER}{ws_next}"
+                code = _follow_and_extract_code(session, full_next)
+                tokens = codex_exchange_code(code, code_verifier) if code else None
+                _save_result(tokens, workspace_name, "default", None, workspace_id=workspace_id, org_id="default", project_id=None)
+                if not tokens:
+                    _mark_failed(detail="workspace_no_orgs_token_exchange_failed")
+            return
+
+        for org_index, org in enumerate(orgs):
+            org_id = org.get("id")
+            org_name = org.get("name") or org.get("title") or f"org-{org_index}"
+            if not org_id:
+                continue
+
+            projects = org.get("projects") or [{"id": None, "name": None}]
+
+            for project_index, project in enumerate(projects):
+                project_id = (project or {}).get("id")
+                project_name = (project or {}).get("name") or (project or {}).get("title")
+
+                # 每个 org/project 前重新选择 workspace，保持后续组织选择稳定
+                try:
+                    session.post(
+                        f"{OAUTH_ISSUER}/api/accounts/workspace/select",
+                        json={"workspace_id": workspace_id},
+                        headers=h_ws,
+                        verify=False,
+                        timeout=30,
+                        allow_redirects=False,
+                    )
+                except Exception:
+                    pass
+
+                body = {"org_id": org_id}
+                if project_id:
+                    body["project_id"] = project_id
+
+                org_ref = ws_next if ws_next.startswith("http") else (f"{OAUTH_ISSUER}{ws_next}" if ws_next else consent_url)
+                h_org = dict(COMMON_HEADERS)
+                h_org["referer"] = org_ref
+                h_org["oai-device-id"] = device_id
+                h_org.update(generate_datadog_trace())
+
+                label = f"{workspace_name}/{org_name}" + (f"/{project_name}" if project_id else "")
+                print(f"  🔄 选择空间: {label}")
+
+                try:
+                    resp_org = session.post(
+                        f"{OAUTH_ISSUER}/api/accounts/organization/select",
+                        json=body,
+                        headers=h_org,
+                        verify=False,
+                        timeout=30,
+                        allow_redirects=False,
+                    )
+                except Exception as e:
+                    print(f"  ❌ organization/select 异常: {label} -> {e}")
+                    _mark_failed(org_name=org_name, project_name=project_name if project_id else None, org_id=org_id, project_id=project_id, detail=f"organization_select_exception:{e}")
+                    continue
+
+                code = None
+                if resp_org.status_code in (301, 302, 303, 307, 308):
+                    location = resp_org.headers.get("Location", "")
+                    code = _extract_code_from_url(location) or _follow_and_extract_code(session, location)
+                elif resp_org.status_code == 200:
+                    try:
+                        org_data = resp_org.json()
+                        org_next = org_data.get("continue_url", "")
+                        if org_next:
+                            full_next = org_next if org_next.startswith("http") else f"{OAUTH_ISSUER}{org_next}"
+                            code = _follow_and_extract_code(session, full_next)
+                    except Exception:
+                        pass
+                elif resp_org.status_code == 409:
+                    print(f"  ⚠️ organization/select 冲突: {label} -> 409 {resp_org.text[:180]}")
+                    _mark_failed(org_name=org_name, project_name=project_name if project_id else None, org_id=org_id, project_id=project_id, detail=f"organization_select_409:{resp_org.text[:120]}")
+                    continue
+
+                if not code:
+                    print(f"  ⚠️ 未获取到 code: {label}")
+                    _mark_failed(org_name=org_name, project_name=project_name if project_id else None, org_id=org_id, project_id=project_id, detail="no_auth_code")
+                    continue
+
+                tokens = codex_exchange_code(code, code_verifier)
+                _save_result(
+                    tokens,
+                    workspace_name,
+                    org_name,
+                    project_name if project_id else None,
+                    workspace_id=workspace_id,
+                    org_id=org_id,
+                    project_id=project_id,
+                )
+                if not tokens:
+                    _mark_failed(org_name=org_name, project_name=project_name if project_id else None, org_id=org_id, project_id=project_id, detail="token_exchange_failed")
+
+    reused_first_prepare = False
+    pending_workspace_count = 0
+    for ws_index, workspace in enumerate(workspaces):
+        wid = workspace.get("id")
+        name = workspace.get("name") or workspace.get("title") or f"workspace-{ws_index}"
+
+        if _workspace_recorded_all(email, wid):
+            print(f"  ⏭️ 跳过已录 workspace: {name} ({wid})")
+            continue
+
+        pending_workspace_count += 1
+
+        if not reused_first_prepare:
+            prep_i = prep
+            reused_first_prepare = True
+        else:
+            prep_i = perform_codex_oauth_login_http(
+                email=email,
+                password=password,
+                registrar_session=registrar_session,
+                cf_token=cf_token,
+                mail_client=mail_client,
+                prepare_only=True,
+            )
+
+        if not prep_i:
+            print(f"  ❌ 跳过空间（prepare 失败）: {name}")
+            _update_space_record(
+                email,
+                {
+                    "workspace": name,
+                    "workspace_id": wid,
+                    "org": "default",
+                    "org_id": "default",
+                    "project": None,
+                    "project_id": None,
+                },
+                "failed",
+                "prepare_failed",
+            )
+            _update_workspace_status(email, wid, name, "failed", "prepare_failed")
+            continue
+
+        _run_workspace_flow(workspace, ws_index, prep_i)
+
+    if pending_workspace_count == 0:
+        print("  ✅ 当前账号所有 workspace 均已录入，已全部跳过")
+        if isinstance(status_out, dict):
+            status_out["all_skipped"] = True
+        return []
+
+    if not all_results:
+        print("  ⚠️ 全空间遍历未拿到 token，回退单空间登录")
+        single = perform_codex_oauth_login_http(
+            email=email,
+            password=password,
+            registrar_session=registrar_session,
+            cf_token=cf_token,
+            mail_client=mail_client,
+        )
+        if single == "ACCOUNT_BANNED":
+            if isinstance(status_out, dict):
+                status_out["account_banned"] = True
+            return []
+        if single:
+            if isinstance(status_out, dict):
+                status_out["fallback_single"] = True
+            return [{
+                "workspace": "default",
+                "org": "default",
+                "project": None,
+                "workspace_id": "default",
+                "org_id": "default",
+                "project_id": None,
+                "tokens": single,
+            }]
+        return []
+
+    print(f"  ✅ 全空间遍历完成，共获取 {len(all_results)} 组 token")
+    if isinstance(status_out, dict):
+        status_out["token_count"] = len(all_results)
+    return all_results
+
+
 # =================== Token 保存 + codex-server 后端录入 ===================
 
 def _http_post_json_raw(url, json_body, headers):
@@ -2055,8 +3045,8 @@ def submit_to_codex_server(name, tokens):
         }
     }
     """
-    if not SERVER_BASE or not ADMIN_AUTH:
-        print("  ⚠️ 未配置 SERVER_BASE/ADMIN_AUTH，跳过 codex-server 录入")
+    if not SERVER_BASE:
+        print("  ⚠️ 未配置 SERVER_BASE，跳过 codex-server 录入")
         return None
 
     body = {
@@ -2082,10 +3072,13 @@ def submit_to_codex_server(name, tokens):
     print(f"  📤 正在录入 codex-server 后端: {url}")
 
     try:
-        resp = _http_post_json_raw(url, body, headers={
-            "content-type": "application/json",
-            "authorization": ADMIN_AUTH,
-        })
+        headers = {"content-type": "application/json"}
+        if ADMIN_AUTH:
+            headers["authorization"] = ADMIN_AUTH
+        else:
+            print("  ⚠️ 未配置 ADMIN_AUTH，尝试无鉴权录入")
+
+        resp = _http_post_json_raw(url, body, headers=headers)
         if resp.status_code == 200 or resp.status_code == 201:
             result = resp.json()
             data = result.get("data") or result
@@ -2103,6 +3096,7 @@ def submit_to_codex_server(name, tokens):
 
 _daily_counter_lock = threading.Lock()
 _COUNTER_FILE = os.path.join(SCRIPTS_DIR, "daily_counter.json")
+_SPACE_RECORD_PATH = os.path.join(SCRIPTS_DIR, SPACE_RECORD_FILE)
 
 
 def _load_daily_counter():
@@ -2126,9 +3120,13 @@ def _save_daily_counter(date_str, count):
         pass
 
 
+# 录入名称前缀（默认 "free"，命令行可通过 --prefix / --no-prefix 修改）
+_NAME_PREFIX = "free"
+
+
 def _next_daily_name():
     """
-    生成 "月-日-序号" 格式的名称，如 2-21-1、2-21-2。
+    生成 "[前缀-]月-日-序号" 格式的名称，如 free-3-21-1 或 3-21-1。
     线程安全，持久化到 daily_counter.json，多次运行序号可接续。
     """
     now = datetime.now(timezone(timedelta(hours=8)))
@@ -2141,11 +3139,13 @@ def _next_daily_name():
             saved_count = 0
         saved_count += 1
         _save_daily_counter(today, saved_count)
+        if _NAME_PREFIX:
+            return f"{_NAME_PREFIX}-{today}-{saved_count}"
         return f"{today}-{saved_count}"
 
 
 def save_tokens(email, tokens):
-    """保存 tokens 到所有目标（txt + codex-server 后端录入），线程安全"""
+    """保存 tokens 到所有目标（txt + codex-server 后端录入），线程安全。返回是否录入成功。"""
     access_token = tokens.get("access_token", "")
     refresh_token = tokens.get("refresh_token", "")
     id_token = tokens.get("id_token", "")
@@ -2162,7 +3162,393 @@ def save_tokens(email, tokens):
     if access_token:
         name = _next_daily_name()
         print(f"  📛 录入名称: {name}（邮箱: {email}）")
-        submit_to_codex_server(name, tokens)
+        return submit_to_codex_server(name, tokens) is not None
+    return False
+
+
+def _now_local_str():
+    return time.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _read_space_record_state():
+    if not os.path.exists(_SPACE_RECORD_PATH):
+        return {"version": 1, "updated_at": _now_local_str(), "accounts": {}}
+    try:
+        with open(_SPACE_RECORD_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            data.setdefault("version", 1)
+            data.setdefault("updated_at", _now_local_str())
+            data.setdefault("accounts", {})
+            return data
+    except Exception:
+        pass
+    return {"version": 1, "updated_at": _now_local_str(), "accounts": {}}
+
+
+def _write_space_record_state(state):
+    tmp_path = f"{_SPACE_RECORD_PATH}.tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(state, f, ensure_ascii=False, indent=2)
+    os.replace(tmp_path, _SPACE_RECORD_PATH)
+
+
+def _recompute_account_status_locked(account):
+    ws_map = account.setdefault("workspace_status", {})
+    total = len(ws_map)
+    recorded_all_count = 0
+    partial_count = 0
+    failed_count = 0
+
+    for item in ws_map.values():
+        st = str((item or {}).get("status") or "")
+        if st == "recorded_all":
+            recorded_all_count += 1
+        elif st == "partial":
+            partial_count += 1
+        elif st == "failed":
+            failed_count += 1
+
+    if total > 0 and recorded_all_count == total:
+        status = "recorded_all"
+        detail = f"workspace_recorded_all:{recorded_all_count}/{total}"
+    elif recorded_all_count > 0 or partial_count > 0:
+        status = "partial"
+        detail = f"workspace_partial:{recorded_all_count}/{total}"
+    elif total > 0:
+        status = "failed"
+        detail = f"workspace_failed:{failed_count}/{total}"
+    else:
+        status = "empty"
+        detail = "no_workspace_status"
+
+    account["account_status"] = {
+        "status": status,
+        "detail": detail,
+        "workspace_total": total,
+        "workspace_recorded": recorded_all_count,
+        "updated_at": _now_local_str(),
+    }
+    return account["account_status"]
+
+
+def _space_meta(item):
+    workspace_id = str(item.get("workspace_id") or item.get("workspace") or "unknown_workspace")
+    org_id = str(item.get("org_id") or item.get("org") or "unknown_org")
+    project_raw = item.get("project_id")
+    project_id = str(project_raw) if project_raw not in (None, "", "None") else "-"
+    workspace = str(item.get("workspace") or workspace_id)
+    org = str(item.get("org") or org_id)
+    project = item.get("project")
+    key = f"{workspace_id}|{org_id}|{project_id}"
+    label = f"{workspace}/{org}" + (f"/{project}" if project else "")
+    return {
+        "key": key,
+        "label": label,
+        "workspace_id": workspace_id,
+        "org_id": org_id,
+        "project_id": (None if project_id == "-" else project_id),
+        "workspace": workspace,
+        "org": org,
+        "project": project,
+    }
+
+
+def _space_already_recorded(email, item):
+    meta = _space_meta(item)
+    with _space_record_lock:
+        state = _read_space_record_state()
+        account = ((state.get("accounts") or {}).get(email) or {})
+        spaces = account.get("spaces") or {}
+        status = (spaces.get(meta["key"]) or {}).get("status")
+        return status == "recorded", meta
+
+
+def _update_space_record(email, item, status, detail=""):
+    meta = _space_meta(item)
+    with _space_record_lock:
+        state = _read_space_record_state()
+        accounts = state.setdefault("accounts", {})
+        account = accounts.setdefault(email, {"updated_at": _now_local_str(), "spaces": {}, "workspace_status": {}})
+        spaces = account.setdefault("spaces", {})
+        entry = spaces.get(meta["key"], {})
+        entry.update({
+            "workspace": meta["workspace"],
+            "workspace_id": meta["workspace_id"],
+            "org": meta["org"],
+            "org_id": meta["org_id"],
+            "project": meta["project"],
+            "project_id": meta["project_id"],
+            "status": status,
+            "detail": detail or "",
+            "updated_at": _now_local_str(),
+        })
+        spaces[meta["key"]] = entry
+        _recompute_account_status_locked(account)
+        account["updated_at"] = _now_local_str()
+        state["updated_at"] = _now_local_str()
+        _write_space_record_state(state)
+
+
+def _workspace_recorded_all(email, workspace_id):
+    wid = str(workspace_id or "")
+    if not wid:
+        return False
+    with _space_record_lock:
+        state = _read_space_record_state()
+        account = ((state.get("accounts") or {}).get(email) or {})
+        ws_status = account.get("workspace_status") or {}
+        return (ws_status.get(wid) or {}).get("status") == "recorded_all"
+
+
+def _account_recorded_all(email):
+    account_email = str(email or "").strip()
+    if not account_email:
+        return False, {}
+    with _space_record_lock:
+        state = _read_space_record_state()
+        account = ((state.get("accounts") or {}).get(account_email) or {})
+        account_status = account.get("account_status")
+        if not isinstance(account_status, dict):
+            account_status = _recompute_account_status_locked(account)
+            if account:
+                state.setdefault("accounts", {})[account_email] = account
+                state["updated_at"] = _now_local_str()
+                _write_space_record_state(state)
+        done = str((account_status or {}).get("status") or "") == "recorded_all"
+        return done, dict(account_status or {})
+
+
+def _mark_account_banned(email):
+    """将账号标记为封禁，持久化到 space_record_status.json，防止下次重复尝试。"""
+    account_email = str(email or "").strip()
+    if not account_email:
+        return
+    with _space_record_lock:
+        state = _read_space_record_state()
+        accounts = state.setdefault("accounts", {})
+        account = accounts.setdefault(account_email, {"updated_at": _now_local_str(), "spaces": {}, "workspace_status": {}})
+        account["account_status"] = {
+            "status": "banned",
+            "detail": "account_deleted_or_deactivated",
+            "updated_at": _now_local_str(),
+        }
+        account["updated_at"] = _now_local_str()
+        state["updated_at"] = _now_local_str()
+        _write_space_record_state(state)
+    print(f"  📝 已记录封禁状态: {account_email}")
+
+
+def _is_account_banned(email):
+    """检查账号是否已被标记为封禁。"""
+    account_email = str(email or "").strip()
+    if not account_email:
+        return False
+    with _space_record_lock:
+        state = _read_space_record_state()
+        account = ((state.get("accounts") or {}).get(account_email) or {})
+        account_status = account.get("account_status")
+        if isinstance(account_status, dict):
+            return account_status.get("status") == "banned"
+    return False
+
+
+
+def _update_workspace_status(email, workspace_id, workspace_name, status, detail=""):
+    wid = str(workspace_id or "")
+    if not wid:
+        return
+    with _space_record_lock:
+        state = _read_space_record_state()
+        accounts = state.setdefault("accounts", {})
+        account = accounts.setdefault(email, {"updated_at": _now_local_str(), "spaces": {}, "workspace_status": {}})
+        ws_map = account.setdefault("workspace_status", {})
+        ws_map[wid] = {
+            "workspace": str(workspace_name or wid),
+            "workspace_id": wid,
+            "status": str(status or ""),
+            "detail": detail or "",
+            "updated_at": _now_local_str(),
+        }
+        _recompute_account_status_locked(account)
+        account["updated_at"] = _now_local_str()
+        state["updated_at"] = _now_local_str()
+        _write_space_record_state(state)
+
+
+def _refresh_workspace_status_from_items(email, items):
+    data_items = [x for x in (items or []) if isinstance(x, dict)]
+    if not data_items:
+        return
+
+    grouped = {}
+    for item in data_items:
+        meta = _space_meta(item)
+        wid = meta["workspace_id"]
+        grouped.setdefault(wid, {"workspace": meta["workspace"], "keys": set()})
+        grouped[wid]["keys"].add(meta["key"])
+
+    with _space_record_lock:
+        state = _read_space_record_state()
+        accounts = state.setdefault("accounts", {})
+        account = accounts.setdefault(email, {"updated_at": _now_local_str(), "spaces": {}, "workspace_status": {}})
+        spaces = account.setdefault("spaces", {})
+        ws_map = account.setdefault("workspace_status", {})
+
+        for wid, info in grouped.items():
+            keys = list(info["keys"])
+            statuses = [str((spaces.get(k) or {}).get("status") or "") for k in keys]
+            if statuses and all(s == "recorded" for s in statuses):
+                status = "recorded_all"
+                detail = f"all_recorded:{len(keys)}"
+            elif any(s == "recorded" for s in statuses):
+                status = "partial"
+                detail = f"partial_recorded:{sum(1 for s in statuses if s == 'recorded')}/{len(keys)}"
+            else:
+                status = "failed"
+                detail = f"all_failed:{len(keys)}"
+
+            ws_map[wid] = {
+                "workspace": info["workspace"],
+                "workspace_id": wid,
+                "status": status,
+                "detail": detail,
+                "updated_at": _now_local_str(),
+            }
+
+        _recompute_account_status_locked(account)
+        account["updated_at"] = _now_local_str()
+        state["updated_at"] = _now_local_str()
+        _write_space_record_state(state)
+
+
+def save_workspace_tokens_parallel(email, all_results, prefix=""):
+    """将多空间 tokens 并行录入到本地文件和 codex-server。"""
+    items = [item for item in (all_results or []) if isinstance(item, dict)]
+    if not items:
+        return 0
+
+    pending = []
+    skipped = 0
+    for item in items:
+        recorded, meta = _space_already_recorded(email, item)
+        if recorded:
+            skipped += 1
+            print(f"⏭️ 跳过已录入空间: {meta['label']}")
+            _update_space_record(email, item, "recorded", "already_recorded_skip")
+            continue
+        pending.append(item)
+
+    if not pending:
+        print(f"✅ 本次空间均已录入，无需重复提交（跳过 {skipped}）")
+        _refresh_workspace_status_from_items(email, items)
+        return 0
+
+    workers = max(1, min(len(pending), WORKSPACE_RECORD_WORKERS))
+    tag = f"{prefix} " if prefix else ""
+    print(f"{tag}⚙️ 空间录入并发: {workers}（待录入 {len(pending)}，已跳过 {skipped}）")
+
+    def _submit(item):
+        meta = _space_meta(item)
+        tokens = item.get("tokens", {})
+        label = meta["label"]
+        print(f"{tag}📤 录入空间: {label}")
+        ok = bool(save_tokens(email, tokens))
+        if ok:
+            _update_space_record(email, item, "recorded", "submit_ok")
+        else:
+            _update_space_record(email, item, "failed", "submit_failed")
+        return 1 if ok else 0
+
+    if workers == 1:
+        done = 0
+        for item in pending:
+            done += _submit(item)
+        return done
+
+    done = 0
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = [executor.submit(_submit, item) for item in pending]
+        for future in as_completed(futures):
+            try:
+                done += int(future.result() or 0)
+            except Exception as e:
+                print(f"{tag}⚠️ 空间录入任务异常: {e}")
+    _refresh_workspace_status_from_items(email, items)
+    return done
+
+
+def create_account_stream_recorder(email, prefix=""):
+    """为单个账号创建流式空间录入器：拿到 token 即提交录入线程池。"""
+    workers = max(1, WORKSPACE_RECORD_WORKERS)
+    tag = f"{prefix} " if prefix else ""
+    print(f"{tag}⚙️ 空间流式录入并发: {workers}")
+
+    executor = ThreadPoolExecutor(max_workers=workers)
+    lock = threading.Lock()
+    futures = []
+    seen_keys = set()
+    seen_items = []
+    stats = {"submitted": 0, "skipped": 0, "ok": 0, "fail": 0}
+
+    def submit(item):
+        if not isinstance(item, dict):
+            return False
+
+        recorded, meta = _space_already_recorded(email, item)
+        with lock:
+            seen_items.append(item)
+
+        if recorded:
+            print(f"{tag}⏭️ 跳过已录入空间: {meta['label']}")
+            _update_space_record(email, item, "recorded", "already_recorded_skip")
+            with lock:
+                stats["skipped"] += 1
+            return False
+
+        with lock:
+            key = meta["key"]
+            if key in seen_keys:
+                stats["skipped"] += 1
+                return False
+            seen_keys.add(key)
+            stats["submitted"] += 1
+
+        def _task():
+            label = meta["label"]
+            print(f"{tag}📤 录入空间: {label}")
+            ok = bool(save_tokens(email, item.get("tokens", {})))
+            if ok:
+                _update_space_record(email, item, "recorded", "submit_ok_stream")
+            else:
+                _update_space_record(email, item, "failed", "submit_failed_stream")
+            return ok
+
+        futures.append(executor.submit(_task))
+        return True
+
+    def wait():
+        for future in as_completed(list(futures)):
+            try:
+                ok = bool(future.result())
+                with lock:
+                    if ok:
+                        stats["ok"] += 1
+                    else:
+                        stats["fail"] += 1
+            except Exception as e:
+                print(f"{tag}⚠️ 空间录入任务异常: {e}")
+                with lock:
+                    stats["fail"] += 1
+
+        executor.shutdown(wait=True)
+        with lock:
+            snapshot_items = list(seen_items)
+            snapshot_stats = dict(stats)
+        _refresh_workspace_status_from_items(email, snapshot_items)
+        return snapshot_stats
+
+    return {"submit": submit, "wait": wait}
 
 
 # =================== 账号持久化 ===================
@@ -2215,22 +3601,38 @@ def register_one(worker_id=0, task_index=0, total=1):
 
     print(f"  📝 注册耗时: {t_reg:.1f}s")
 
-    # 3. Codex OAuth 登录
-    tokens = None
+    # 3. Codex OAuth 登录（遍历全部空间）
+    all_results = []
     try:
-        tokens = perform_codex_oauth_login_http(
+        recorder = create_account_stream_recorder(email, prefix=tag)
+        oauth_status = {}
+        all_results = perform_codex_oauth_login_http_all_spaces(
             email, password,
             registrar_session=registrar.session,
             cf_token=cf_token,
+            on_result=recorder["submit"],
+            status_out=oauth_status,
         )
+        stream_stats = recorder["wait"]()
 
-        if not tokens:
+        if oauth_status.get("account_banned"):
+            _mark_account_banned(email)
+            t_total = time.time() - t_start
+            print(f"{tag} 🚫 {email} | 账号已被封禁/停用，跳过全部空间")
+            return email, password, False, t_reg, t_total
+
+        if not all_results and not oauth_status.get("all_skipped"):
             print(f"{tag}  ❌ 纯 HTTP OAuth 失败")
 
         t_total = time.time() - t_start
-        if tokens:
-            save_tokens(email, tokens)
-            print(f"{tag} ✅ {email} | 注册 {t_reg:.1f}s + OAuth {t_total - t_reg:.1f}s = 总 {t_total:.1f}s")
+        if all_results:
+            print(
+                f"{tag} ✅ {email} | token {len(all_results)} 组 | "
+                f"录入成功 {stream_stats.get('ok', 0)} | 跳过 {stream_stats.get('skipped', 0)} | "
+                f"注册 {t_reg:.1f}s + OAuth {t_total - t_reg:.1f}s = 总 {t_total:.1f}s"
+            )
+        elif oauth_status.get("all_skipped"):
+            print(f"{tag} ✅ {email} | 当前账号空间均已录入，全部跳过")
         else:
             print(f"{tag} ⚠️ OAuth 失败（注册已成功）")
     except Exception as e:
@@ -2327,5 +3729,236 @@ def run_batch():
     print(f"\n🏁 完成: ✅{ok} ❌{fail} | 总耗时 {elapsed:.1f}s | 吞吐 {throughput:.1f}s/个 | 单号(注册 {avg_reg:.1f}s + OAuth {avg_total - avg_reg:.1f}s = {avg_total:.1f}s)")
 
 
-if __name__ == "__main__":
+def _process_specified_email(email, skip_register=False, password_override=None, force_refresh=False):
+    email = (email or "").strip()
+    if not email:
+        print("❌ 邮箱不能为空")
+        return False
+
+    password = (password_override or "").strip() or email.split("@")[0]
+    print("\n" + "=" * 60)
+    print("  Aifun 指定邮箱模式")
+    print("=" * 60)
+    print(f"  📧 邮箱: {email}")
+    print(f"  🔑 密码: {password}")
+    print(f"  ⏭️ 跳过注册: {'是' if skip_register else '否'}")
+
+    if _is_account_banned(email):
+        print(f"  🚫 账号已被封禁/停用（已记录），跳过: {email}")
+        return False
+
+    if not force_refresh:
+        account_done, acc_status = _account_recorded_all(email)
+        if account_done:
+            detail = (acc_status or {}).get("detail", "")
+            print(f"  ⏭️ 账号已全部录入，整账号跳过（{detail}）")
+            return True
+
+    try:
+        mail_client = AifunMailClient(email)
+    except Exception as e:
+        print(f"❌ 初始化 aifun 邮箱客户端失败: {e}")
+        return False
+    save_account(email, password)
+
+    if skip_register:
+        print("  ⏭️ 已跳过注册，直接登录录入")
+    else:
+        reg_success = register_account_with_aifun(email, password, mail_client)
+        if not reg_success:
+            print("  ⚠️ 注册失败，继续尝试登录录入")
+        time.sleep(3)
+
+    recorder = create_account_stream_recorder(email)
+    oauth_status = {}
+    all_results = perform_codex_oauth_login_http_all_spaces(
+        email,
+        password,
+        cf_token=None,
+        mail_client=mail_client,
+        on_result=recorder["submit"],
+        status_out=oauth_status,
+    )
+    stream_stats = recorder["wait"]()
+
+    if oauth_status.get("account_banned"):
+        _mark_account_banned(email)
+        print(f"🚫 账号已被封禁/停用，跳过: {email}")
+        return False
+
+    if all_results:
+        print(
+            f"✅ 完成: {email}（token {len(all_results)} 组，"
+            f"录入成功 {stream_stats.get('ok', 0)}，跳过 {stream_stats.get('skipped', 0)}）"
+        )
+        return True
+
+    if oauth_status.get("all_skipped"):
+        print(f"✅ 完成: {email}（workspace 均已录入，全部跳过）")
+        return True
+
+    # 全空间失败时，保留一次单空间兜底，避免完全中断
+    tokens = perform_codex_oauth_login_http(
+        email,
+        password,
+        cf_token=None,
+        mail_client=mail_client,
+    )
+    if tokens == "ACCOUNT_BANNED":
+        _mark_account_banned(email)
+        print(f"🚫 账号已被封禁/停用，跳过: {email}")
+        return False
+    if tokens:
+        save_tokens(email, tokens)
+        print(f"✅ 完成: {email}")
+        return True
+
+    print(f"❌ 登录或录入失败: {email}")
+    return False
+
+
+def _parse_team_range(raw):
+    text = (raw or "").strip()
+    if not text:
+        raise ValueError("team-range 不能为空")
+    if "-" in text:
+        left, right = text.split("-", 1)
+        start = int(left.strip())
+        end = int(right.strip())
+        if start > end:
+            start, end = end, start
+    else:
+        start = end = int(text)
+    return start, end
+
+
+def _build_team_range_emails(team_start, team_end, per_team=7, qiuming_start=1):
+    emails = []
+    for team_no in range(int(team_start), int(team_end) + 1):
+        for idx in range(int(qiuming_start), int(qiuming_start) + int(per_team)):
+            emails.append(f"qiuming{idx}team{team_no}@aifun.edu.kg")
+    return emails
+
+
+def run_specified_emails_batch(emails, skip_register=False, workers=1, force_refresh=False):
+    todo = [e for e in (emails or []) if e]
+    if not todo:
+        print("❌ 没有可执行邮箱")
+        return []
+
+    workers = max(1, min(int(workers or 1), len(todo)))
+    print("\n" + "=" * 60)
+    print("  Aifun 区间批量录入模式")
+    print("=" * 60)
+    print(f"  总邮箱数: {len(todo)}")
+    print(f"  账号并发: {workers}")
+    print(f"  空间录入并发(单账号内): {WORKSPACE_RECORD_WORKERS}")
+    print(f"  skip-register: {'是' if skip_register else '否'}")
+    print(f"  force-refresh: {'是' if force_refresh else '否'}")
+
+    results = []
+
+    def _run_one(email):
+        ok = _process_specified_email(
+            email=email,
+            skip_register=skip_register,
+            password_override=None,
+            force_refresh=force_refresh,
+        )
+        return {"email": email, "ok": bool(ok)}
+
+    if workers == 1:
+        for email in todo:
+            try:
+                results.append(_run_one(email))
+            except Exception as e:
+                print(f"❌ 账号执行异常: {email} -> {e}")
+                results.append({"email": email, "ok": False})
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            future_map = {executor.submit(_run_one, email): email for email in todo}
+            for future in as_completed(future_map):
+                email = future_map[future]
+                try:
+                    results.append(future.result())
+                except Exception as e:
+                    print(f"❌ 账号执行异常: {email} -> {e}")
+                    results.append({"email": email, "ok": False})
+
+    ok_count = sum(1 for x in results if x.get("ok"))
+    fail_count = len(results) - ok_count
+    print(f"\n🏁 区间批量完成: ✅{ok_count} ❌{fail_count} / 总 {len(results)}")
+    return results
+
+
+def main():
+    parser = argparse.ArgumentParser(description="协议注册机（支持 Aifun 指定邮箱与区间批量模式）")
+    parser.add_argument("--email", help="指定 aifun 邮箱，例如 qiuming1team1008@aifun.edu.kg")
+    parser.add_argument("--password", help="指定密码；不传默认邮箱前缀")
+    parser.add_argument("--skip-register", action="store_true", help="跳过注册，直接登录并录入")
+    parser.add_argument("--force-refresh", action="store_true", help="忽略本地录入记录，强制重新执行")
+    parser.add_argument("--team-range", help="团队区间，例如 10031-10035（含首尾）")
+    parser.add_argument("--per-team", type=int, default=7, help="每个团队邮箱数量，默认 7")
+    parser.add_argument("--qiuming-start", type=int, default=1, help="qiuming 起始编号，默认 1")
+    parser.add_argument("--account-workers", type=int, default=ACCOUNT_RECORD_WORKERS, help="账号并发数（不同账号并行）")
+    parser.add_argument("--workspace-workers", type=int, default=None, help="空间录入并发数（单账号内），默认使用 config.json 中的 workspace_record_workers")
+    parser.add_argument("--prefix", type=str, default=None, help="录入名称前缀，默认 'free'（如 free-3-21-1）；传空字符串则不加前缀（如 3-21-1）")
+    parser.add_argument("--no-prefix", action="store_true", help="录入名称不加 free 前缀（等同于 --prefix ''）")
+    args = parser.parse_args()
+
+    # 如果命令行指定了 workspace-workers，覆盖全局变量
+    global WORKSPACE_RECORD_WORKERS
+    if args.workspace_workers is not None:
+        WORKSPACE_RECORD_WORKERS = max(1, int(args.workspace_workers))
+        print(f"📌 空间录入并发数(命令行指定): {WORKSPACE_RECORD_WORKERS}")
+
+    # 处理名称前缀
+    global _NAME_PREFIX
+    if args.no_prefix:
+        _NAME_PREFIX = ""
+        print("📌 录入名称前缀: (无)")
+    elif args.prefix is not None:
+        _NAME_PREFIX = args.prefix.strip()
+        print(f"📌 录入名称前缀: {_NAME_PREFIX if _NAME_PREFIX else '(无)'}")
+
+    if args.email:
+        if not AIFUN_AUTH:
+            print("❌ 缺少 AIFUN_AUTH 配置，无法使用 aifun 邮箱")
+            return
+        _process_specified_email(
+            email=args.email,
+            skip_register=args.skip_register,
+            password_override=args.password,
+            force_refresh=args.force_refresh,
+        )
+        return
+
+    if args.team_range:
+        if not AIFUN_AUTH:
+            print("❌ 缺少 AIFUN_AUTH 配置，无法使用 aifun 邮箱")
+            return
+        try:
+            team_start, team_end = _parse_team_range(args.team_range)
+            emails = _build_team_range_emails(
+                team_start=team_start,
+                team_end=team_end,
+                per_team=max(1, int(args.per_team)),
+                qiuming_start=max(1, int(args.qiuming_start)),
+            )
+        except Exception as e:
+            print(f"❌ team-range 参数错误: {e}")
+            return
+
+        run_specified_emails_batch(
+            emails=emails,
+            skip_register=args.skip_register,
+            workers=max(1, int(args.account_workers)),
+            force_refresh=args.force_refresh,
+        )
+        return
+
     run_batch()
+
+
+if __name__ == "__main__":
+    main()
