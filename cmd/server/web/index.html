@@ -1,0 +1,2378 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Codex Control Deck</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #06131f;
+      --bg-soft: rgba(8, 25, 39, 0.72);
+      --bg-card: rgba(10, 26, 41, 0.72);
+      --bg-card-strong: rgba(6, 19, 31, 0.88);
+      --border: rgba(135, 200, 255, 0.16);
+      --border-strong: rgba(135, 200, 255, 0.28);
+      --text: #e8f3ff;
+      --text-dim: #8fb6d7;
+      --text-muted: #6588a5;
+      --accent: #6be6ff;
+      --accent-2: #6c8cff;
+      --success: #4fffb0;
+      --warning: #ffd36c;
+      --danger: #ff7c88;
+      --info: #76bbff;
+      --shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+      --radius: 12px;
+      --radius-lg: 18px;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; min-height: 100%; }
+    body {
+      font-family: "IBM Plex Sans", sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 15% 20%, rgba(76, 179, 255, 0.18), transparent 32%),
+        radial-gradient(circle at 85% 12%, rgba(79, 255, 176, 0.18), transparent 28%),
+        radial-gradient(circle at 75% 82%, rgba(108, 140, 255, 0.14), transparent 28%),
+        linear-gradient(145deg, #04111d 0%, #071a2a 48%, #04111b 100%);
+      background-attachment: fixed;
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background-image:
+        linear-gradient(rgba(255,255,255,0.02) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.02) 1px, transparent 1px);
+      background-size: 28px 28px;
+      mask-image: radial-gradient(circle at center, rgba(0,0,0,0.9), transparent 88%);
+      opacity: 0.4;
+    }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: rgba(135, 200, 255, 0.18); border-radius: 99px; }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(135, 200, 255, 0.32); }
+
+    button, input, textarea, select { font: inherit; }
+
+    button {
+      border: 0;
+      border-radius: 12px;
+      cursor: pointer;
+      transition: transform 0.18s ease, box-shadow 0.18s ease, opacity 0.18s ease;
+    }
+
+    button:hover:not(:disabled) {
+      transform: translateY(-1px);
+      box-shadow: 0 10px 24px rgba(0, 0, 0, 0.22);
+    }
+
+    button:active:not(:disabled) {
+      transform: translateY(0);
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
+    }
+
+    button:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+      transform: none;
+      box-shadow: none;
+    }
+
+    input, textarea, select {
+      width: 100%;
+      border: 1px solid var(--border);
+      background: rgba(3, 15, 25, 0.78);
+      color: var(--text);
+      border-radius: 12px;
+      padding: 11px 12px;
+      outline: none;
+      transition: border-color 0.18s ease, box-shadow 0.18s ease;
+    }
+
+    input:focus, textarea:focus, select:focus {
+      border-color: rgba(107, 230, 255, 0.6);
+      box-shadow: 0 0 0 4px rgba(107, 230, 255, 0.08);
+    }
+
+    textarea { resize: vertical; min-height: 76px; }
+
+    .mono { font-family: "JetBrains Mono", monospace; }
+    .hidden { display: none !important; }
+
+    /* ── Login ── */
+    #login-view {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 28px;
+    }
+
+    .login-shell {
+      width: min(440px, 100%);
+      padding: 30px;
+      border-radius: 24px;
+      border: 1px solid var(--border-strong);
+      background: linear-gradient(180deg, rgba(8, 26, 43, 0.82), rgba(4, 18, 31, 0.88));
+      backdrop-filter: blur(18px);
+      box-shadow: var(--shadow);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .login-shell::after {
+      content: "";
+      position: absolute;
+      inset: -20% auto auto -20%;
+      width: 240px;
+      height: 240px;
+      background: radial-gradient(circle, rgba(107, 230, 255, 0.22), transparent 72%);
+      pointer-events: none;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 12px;
+      border-radius: 999px;
+      background: rgba(107, 230, 255, 0.08);
+      color: var(--accent);
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .login-title {
+      font-size: clamp(32px, 6vw, 46px);
+      line-height: 1.02;
+      margin: 18px 0 10px;
+      font-weight: 700;
+      letter-spacing: -0.04em;
+    }
+
+    .login-subtitle {
+      color: var(--text-dim);
+      line-height: 1.6;
+      margin-bottom: 24px;
+    }
+
+    .field-stack { display: grid; gap: 10px; }
+
+    .field-label {
+      font-size: 12px;
+      color: var(--text-dim);
+      margin-bottom: 6px;
+      display: block;
+    }
+
+    .login-action {
+      margin-top: 18px;
+      width: 100%;
+      padding: 13px 16px;
+      font-weight: 600;
+      color: #042131;
+      background: linear-gradient(135deg, var(--accent) 0%, #8fffd2 100%);
+    }
+
+    .login-error {
+      min-height: 20px;
+      margin-top: 12px;
+      color: var(--danger);
+      font-size: 13px;
+    }
+
+    /* ── App Shell ── */
+    #app-view {
+      display: none;
+      min-height: 100vh;
+      padding: 18px;
+      gap: 16px;
+    }
+
+    .app-shell {
+      display: grid;
+      grid-template-columns: 360px minmax(0, 1fr);
+      gap: 16px;
+      min-height: calc(100vh - 36px);
+    }
+
+    .panel {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      backdrop-filter: blur(18px);
+      box-shadow: var(--shadow);
+    }
+
+    /* ── Sidebar ── */
+    .sidebar {
+      display: grid;
+      grid-template-rows: auto auto 1fr auto;
+      overflow: hidden;
+    }
+
+    .sidebar-header,
+    .content-header {
+      padding: 18px 20px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+    .sidebar-title,
+    .content-title {
+      font-size: 20px;
+      font-weight: 700;
+      letter-spacing: -0.03em;
+      margin: 0;
+    }
+
+    .sidebar-desc,
+    .content-desc {
+      margin-top: 6px;
+      color: var(--text-dim);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .sidebar-tabs {
+      display: flex;
+      gap: 8px;
+      padding: 14px 18px 0;
+      flex-wrap: wrap;
+    }
+
+    .tab-btn {
+      padding: 9px 12px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.03);
+      color: var(--text-dim);
+      border: 1px solid rgba(255,255,255,0.04);
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      transition: all 0.2s ease;
+    }
+
+    .tab-btn.active {
+      color: #042131;
+      background: linear-gradient(135deg, var(--accent), #8fffd2);
+      border-color: transparent;
+    }
+
+    .sidebar-body {
+      overflow: auto;
+      padding: 14px 18px 22px;
+      display: grid;
+      gap: 14px;
+      align-content: start;
+    }
+
+    .sidebar-footer {
+      position: sticky;
+      bottom: 0;
+      display: flex;
+      gap: 10px;
+      padding: 16px 18px 18px;
+      background: linear-gradient(180deg, rgba(6, 19, 31, 0), rgba(6, 19, 31, 0.95) 34%);
+      border-top: 1px solid rgba(255,255,255,0.05);
+    }
+
+    /* ── Config ── */
+    .config-group {
+      border: 1px solid rgba(255,255,255,0.05);
+      border-radius: 16px;
+      background: rgba(4, 18, 31, 0.56);
+      overflow: hidden;
+    }
+
+    .config-group summary {
+      list-style: none;
+      cursor: pointer;
+      padding: 14px 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      font-weight: 600;
+      transition: background 0.15s ease;
+    }
+
+    .config-group summary:hover { background: rgba(255,255,255,0.02); }
+    .config-group summary::-webkit-details-marker { display: none; }
+    .config-group summary::after {
+      content: "▾";
+      color: var(--text-muted);
+      transition: transform 0.18s ease;
+    }
+
+    .config-group[open] summary::after { transform: rotate(180deg); }
+
+    .config-group-body {
+      padding: 0 16px 16px;
+      display: grid;
+      gap: 12px;
+    }
+
+    .config-row { display: grid; gap: 8px; }
+
+    .config-caption {
+      font-size: 12px;
+      color: var(--text-dim);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .config-hint {
+      font-size: 11px;
+      color: var(--text-muted);
+      line-height: 1.5;
+    }
+
+    .checkbox-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 12px;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,0.05);
+      background: rgba(255,255,255,0.02);
+      transition: background 0.15s ease;
+    }
+
+    .checkbox-row:hover { background: rgba(255,255,255,0.04); }
+
+    .checkbox-row input {
+      width: 18px;
+      height: 18px;
+      margin: 0;
+      accent-color: var(--accent);
+    }
+
+    .cf-list { display: grid; gap: 12px; }
+
+    .cf-item {
+      padding: 14px;
+      border-radius: 14px;
+      border: 1px solid rgba(255,255,255,0.05);
+      background: rgba(255,255,255,0.025);
+      display: grid;
+      gap: 12px;
+    }
+
+    .cf-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .cf-name {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-dim);
+    }
+
+    .btn-link {
+      padding: 0;
+      background: transparent;
+      color: var(--danger);
+      font-size: 12px;
+      box-shadow: none;
+      transform: none !important;
+    }
+
+    /* ── Content ── */
+    .content {
+      display: grid;
+      grid-template-rows: auto 1fr;
+      min-width: 0;
+      overflow: hidden;
+    }
+
+    .content-body {
+      overflow: auto;
+      padding: 18px;
+      display: grid;
+      gap: 16px;
+    }
+
+    .header-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 16px;
+      align-items: center;
+    }
+
+    .status-cluster {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .status-chip,
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: rgba(4, 18, 31, 0.6);
+      font-size: 12px;
+      color: var(--text-dim);
+      transition: all 0.25s ease;
+    }
+
+    .status-dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 999px;
+      background: var(--text-muted);
+      box-shadow: 0 0 0 0 rgba(255,255,255,0.25);
+      transition: background 0.3s ease;
+    }
+
+    .status-running .status-dot {
+      background: var(--success);
+      animation: pulse 1.6s infinite;
+    }
+
+    .status-completed .status-dot { background: var(--accent); }
+    .status-stopped .status-dot { background: var(--warning); }
+    .status-failed .status-dot { background: var(--danger); }
+
+    @keyframes pulse {
+      0% { box-shadow: 0 0 0 0 rgba(79, 255, 176, 0.34); }
+      70% { box-shadow: 0 0 0 10px rgba(79, 255, 176, 0); }
+      100% { box-shadow: 0 0 0 0 rgba(79, 255, 176, 0); }
+    }
+
+    .action-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      justify-content: flex-end;
+    }
+
+    .btn {
+      padding: 11px 16px;
+      font-weight: 600;
+      color: var(--text);
+      background: rgba(8, 30, 47, 0.88);
+      border: 1px solid var(--border);
+    }
+
+    .btn-primary {
+      color: #032236;
+      background: linear-gradient(135deg, var(--accent), #8fffd2);
+      border-color: transparent;
+    }
+
+    .btn-secondary {
+      background: linear-gradient(135deg, rgba(118, 187, 255, 0.2), rgba(108, 140, 255, 0.24));
+    }
+
+    .btn-danger {
+      background: linear-gradient(135deg, rgba(255, 124, 136, 0.18), rgba(255, 124, 136, 0.26));
+    }
+
+    .btn-sm {
+      padding: 7px 12px;
+      font-size: 12px;
+      border-radius: 10px;
+    }
+
+    /* ── Connection Indicator ── */
+    .conn-indicator {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 500;
+      border: 1px solid rgba(255,255,255,0.06);
+      background: rgba(4, 18, 31, 0.6);
+      transition: all 0.3s ease;
+    }
+
+    .conn-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 999px;
+      transition: background 0.3s ease, box-shadow 0.3s ease;
+    }
+
+    .conn-live .conn-dot {
+      background: var(--success);
+      box-shadow: 0 0 6px rgba(79, 255, 176, 0.5);
+    }
+
+    .conn-poll .conn-dot {
+      background: var(--warning);
+    }
+
+    .conn-off .conn-dot {
+      background: var(--danger);
+    }
+
+    /* ── Message Banner ── */
+    .message-banner {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      padding: 14px 16px;
+      border-radius: 14px;
+      border: 1px solid rgba(107, 230, 255, 0.12);
+      background: rgba(5, 21, 34, 0.74);
+    }
+
+    .message-main { min-width: 0; }
+    .message-title {
+      font-size: 13px;
+      color: var(--text-dim);
+      margin-bottom: 4px;
+    }
+    .message-copy {
+      font-size: 15px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+    }
+
+    /* ── Metrics Grid ── */
+    .metrics-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .metric-card {
+      padding: 16px;
+      border-radius: var(--radius);
+      border: 1px solid rgba(255,255,255,0.05);
+      background: linear-gradient(180deg, rgba(10, 26, 41, 0.86), rgba(5, 18, 31, 0.86));
+      transition: border-color 0.25s ease, transform 0.2s ease;
+    }
+
+    .metric-card:hover {
+      border-color: rgba(255,255,255,0.1);
+      transform: translateY(-2px);
+    }
+
+    .metric-label {
+      color: var(--text-dim);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 12px;
+    }
+
+    .metric-value {
+      font-size: clamp(28px, 4vw, 34px);
+      font-weight: 700;
+      letter-spacing: -0.05em;
+      transition: color 0.3s ease;
+    }
+
+    .metric-note {
+      margin-top: 8px;
+      color: var(--text-muted);
+      font-size: 12px;
+    }
+
+    .metric-bar {
+      margin-top: 10px;
+      height: 4px;
+      border-radius: 99px;
+      background: rgba(255,255,255,0.06);
+      overflow: hidden;
+    }
+
+    .metric-bar-fill {
+      height: 100%;
+      border-radius: inherit;
+      transition: width 0.5s ease;
+    }
+
+    .success { color: var(--success); }
+    .danger { color: var(--danger); }
+    .warning { color: var(--warning); }
+    .info { color: var(--info); }
+    .accent { color: var(--accent); }
+
+    /* ── Dashboard Grid ── */
+    .dashboard-grid {
+      display: grid;
+      grid-template-columns: 1.15fr 1fr;
+      gap: 16px;
+    }
+
+    .stack { display: grid; gap: 16px; }
+
+    .card {
+      padding: 18px;
+      border-radius: var(--radius-lg);
+      border: 1px solid var(--border);
+      background: linear-gradient(180deg, rgba(9, 24, 38, 0.82), rgba(4, 17, 29, 0.86));
+      backdrop-filter: blur(16px);
+    }
+
+    .card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+
+    .card-title {
+      font-size: 16px;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+    }
+
+    .card-subtitle {
+      margin-top: 4px;
+      color: var(--text-dim);
+      font-size: 12px;
+    }
+
+    /* ── Dual Pool ── */
+    .dual-pool {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 120px minmax(0, 1fr);
+      align-items: stretch;
+      gap: 14px;
+    }
+
+    .pool-box {
+      padding: 18px;
+      border-radius: 16px;
+      background: rgba(3, 16, 27, 0.7);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      display: grid;
+      gap: 14px;
+      min-width: 0;
+      transition: border-color 0.25s ease;
+    }
+
+    .pool-box:hover { border-color: rgba(255,255,255,0.1); }
+
+    .pool-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .pool-name {
+      font-size: 15px;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+    }
+
+    .pool-stats {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .mini-stat {
+      padding: 12px;
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.04);
+    }
+
+    .mini-label {
+      color: var(--text-muted);
+      font-size: 11px;
+      margin-bottom: 6px;
+    }
+
+    .mini-value {
+      font-size: 20px;
+      font-weight: 700;
+      letter-spacing: -0.04em;
+    }
+
+    .queue-box {
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 18px;
+      border: 1px dashed rgba(107, 230, 255, 0.24);
+      background: linear-gradient(180deg, rgba(6, 18, 30, 0.92), rgba(8, 28, 43, 0.74));
+      overflow: hidden;
+      transition: border-color 0.3s ease;
+    }
+
+    .queue-box.has-items { border-color: rgba(107, 230, 255, 0.45); }
+
+    .queue-box::before,
+    .queue-box::after {
+      content: "";
+      position: absolute;
+      top: 50%;
+      width: 28px;
+      height: 2px;
+      background: linear-gradient(90deg, rgba(107,230,255,0.14), rgba(107,230,255,0.6), rgba(107,230,255,0.14));
+      transform: translateY(-50%);
+    }
+
+    .queue-box::before { left: -14px; }
+    .queue-box::after { right: -14px; }
+
+    .queue-inner {
+      text-align: center;
+      padding: 18px 10px;
+      position: relative;
+      z-index: 1;
+    }
+
+    .queue-count {
+      font-size: 34px;
+      font-weight: 700;
+      letter-spacing: -0.05em;
+      color: var(--accent);
+      transition: transform 0.2s ease;
+    }
+
+    .queue-label {
+      margin-top: 6px;
+      color: var(--text-dim);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    /* ── Inventory / Progress Tracks ── */
+    .inventory-track,
+    .progress-track {
+      position: relative;
+      width: 100%;
+      height: 14px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.06);
+      overflow: hidden;
+      border: 1px solid rgba(255,255,255,0.05);
+    }
+
+    .inventory-fill,
+    .progress-fill {
+      height: 100%;
+      border-radius: inherit;
+      transition: width 0.5s cubic-bezier(0.4, 0, 0.2, 1), background 0.4s ease;
+      background: linear-gradient(90deg, var(--danger), #ff9b5d);
+      width: 0;
+    }
+
+    .inventory-scale,
+    .progress-scale {
+      display: flex;
+      justify-content: space-between;
+      margin-top: 10px;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .inventory-summary,
+    .progress-summary {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+
+    .summary-strong {
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: -0.03em;
+    }
+
+    /* ── Timing Grid ── */
+    .timing-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .timing-card {
+      padding: 14px;
+      border-radius: 14px;
+      background: rgba(255,255,255,0.03);
+      border: 1px solid rgba(255,255,255,0.05);
+      transition: border-color 0.2s ease;
+    }
+
+    .timing-card:hover { border-color: rgba(255,255,255,0.1); }
+
+    .timing-label {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--text-muted);
+    }
+
+    .timing-value {
+      margin-top: 10px;
+      font-size: 24px;
+      font-weight: 700;
+      letter-spacing: -0.05em;
+    }
+
+    /* ── Failure Breakdown ── */
+    .failure-list { display: grid; gap: 10px; }
+
+    .failure-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto auto;
+      gap: 12px;
+      align-items: center;
+      padding: 12px 14px;
+      border-radius: 14px;
+      background: rgba(255,255,255,0.025);
+      border: 1px solid rgba(255,255,255,0.04);
+      transition: background 0.15s ease;
+    }
+
+    .failure-row:hover { background: rgba(255,255,255,0.04); }
+
+    .failure-name {
+      font-size: 13px;
+      color: var(--text-dim);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .failure-bar {
+      width: 80px;
+      height: 6px;
+      border-radius: 99px;
+      background: rgba(255,255,255,0.06);
+      overflow: hidden;
+    }
+
+    .failure-bar-fill {
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, var(--danger), #ff9b5d);
+      transition: width 0.4s ease;
+    }
+
+    .failure-value {
+      font-size: 16px;
+      font-weight: 700;
+      min-width: 32px;
+      text-align: right;
+    }
+
+    /* ── Logs ── */
+    .logs-shell {
+      min-height: 320px;
+      display: grid;
+      grid-template-rows: auto auto 1fr;
+      gap: 12px;
+    }
+
+    .log-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+    }
+
+    .log-actions {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .log-legend {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .log-search {
+      width: 200px;
+      padding: 7px 12px;
+      font-size: 12px;
+      border-radius: 10px;
+    }
+
+    .log-filter-row {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .filter-chip {
+      padding: 5px 10px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 600;
+      border: 1px solid rgba(255,255,255,0.06);
+      background: rgba(255,255,255,0.03);
+      color: var(--text-dim);
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+
+    .filter-chip:hover { background: rgba(255,255,255,0.06); }
+    .filter-chip.active { border-color: var(--accent); color: var(--accent); background: rgba(107,230,255,0.08); }
+
+    .terminal {
+      height: 380px;
+      overflow: auto;
+      border-radius: 16px;
+      border: 1px solid rgba(255,255,255,0.05);
+      background: rgba(2, 10, 18, 0.9);
+      padding: 14px;
+      font-family: "JetBrains Mono", monospace;
+      font-size: 12px;
+      line-height: 1.7;
+    }
+
+    .log-line {
+      display: flex;
+      gap: 10px;
+      padding: 4px 8px;
+      border-radius: 10px;
+      white-space: pre-wrap;
+      word-break: break-word;
+      transition: background 0.1s ease;
+    }
+
+    .log-line:hover { background: rgba(255,255,255,0.03); }
+    .log-line.highlighted { background: rgba(107, 230, 255, 0.08); }
+
+    .log-index {
+      color: rgba(255,255,255,0.25);
+      min-width: 32px;
+      text-align: right;
+      user-select: none;
+    }
+
+    .log-content { flex: 1; }
+    .log-success { color: var(--success); }
+    .log-error { color: var(--danger); }
+    .log-warning { color: var(--warning); }
+    .log-info { color: var(--info); }
+    .log-muted { color: var(--text-dim); }
+
+    .log-match { background: rgba(107, 230, 255, 0.22); border-radius: 3px; padding: 0 2px; }
+
+    .log-empty {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+      color: var(--text-muted);
+      font-size: 13px;
+    }
+
+    /* ── Toast Notifications ── */
+    .toast-container {
+      position: fixed;
+      top: 18px;
+      right: 18px;
+      z-index: 9999;
+      display: grid;
+      gap: 8px;
+      pointer-events: none;
+      max-width: 380px;
+    }
+
+    .toast {
+      pointer-events: auto;
+      padding: 12px 16px;
+      border-radius: 14px;
+      border: 1px solid var(--border);
+      background: rgba(6, 19, 31, 0.95);
+      backdrop-filter: blur(18px);
+      box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
+      font-size: 13px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      animation: toastIn 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+      transition: opacity 0.2s ease, transform 0.2s ease;
+    }
+
+    .toast.removing {
+      opacity: 0;
+      transform: translateX(20px);
+    }
+
+    .toast-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 99px;
+      flex-shrink: 0;
+    }
+
+    .toast-info .toast-dot { background: var(--accent); }
+    .toast-success .toast-dot { background: var(--success); }
+    .toast-danger .toast-dot { background: var(--danger); }
+    .toast-warning .toast-dot { background: var(--warning); }
+
+    @keyframes toastIn {
+      from { opacity: 0; transform: translateX(30px) scale(0.96); }
+      to { opacity: 1; transform: translateX(0) scale(1); }
+    }
+
+    /* ── Confirm Dialog ── */
+    .dialog-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 9998;
+      background: rgba(2, 8, 14, 0.7);
+      backdrop-filter: blur(4px);
+      align-items: center;
+      justify-content: center;
+    }
+
+    .dialog-overlay.show { display: flex; }
+
+    .dialog-box {
+      width: min(400px, 90vw);
+      padding: 24px;
+      border-radius: 20px;
+      border: 1px solid var(--border-strong);
+      background: linear-gradient(180deg, rgba(10, 28, 44, 0.96), rgba(6, 19, 31, 0.98));
+      backdrop-filter: blur(20px);
+      box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5);
+      animation: dialogIn 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    @keyframes dialogIn {
+      from { opacity: 0; transform: scale(0.95) translateY(10px); }
+      to { opacity: 1; transform: scale(1) translateY(0); }
+    }
+
+    .dialog-title {
+      font-size: 18px;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+
+    .dialog-desc {
+      color: var(--text-dim);
+      font-size: 14px;
+      line-height: 1.6;
+      margin-bottom: 20px;
+    }
+
+    .dialog-actions {
+      display: flex;
+      gap: 10px;
+      justify-content: flex-end;
+    }
+
+    /* ── Uptime Badge ── */
+    .uptime-badge {
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* ── Responsive ── */
+    @media (max-width: 1180px) {
+      .app-shell { grid-template-columns: 320px minmax(0, 1fr); }
+      .metrics-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .dashboard-grid { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 900px) {
+      #app-view { padding: 12px; }
+      .app-shell { grid-template-columns: 1fr; min-height: auto; }
+      .sidebar { order: 2; }
+      .content { order: 1; }
+      .header-grid { grid-template-columns: 1fr; }
+      .action-row { justify-content: flex-start; }
+      .dual-pool { grid-template-columns: 1fr; }
+      .queue-box { min-height: 112px; }
+      .timing-grid { grid-template-columns: 1fr; }
+      .sidebar-footer { position: static; background: transparent; padding-top: 0; }
+      .log-search { width: 100%; }
+      .toast-container { left: 12px; right: 12px; max-width: unset; }
+    }
+  </style>
+</head>
+<body>
+  <div id="toast-container" class="toast-container"></div>
+
+  <div id="dialog-overlay" class="dialog-overlay">
+    <div class="dialog-box">
+      <div class="dialog-title" id="dialog-title">确认操作</div>
+      <div class="dialog-desc" id="dialog-desc"></div>
+      <div class="dialog-actions">
+        <button class="btn" id="dialog-cancel" type="button">取消</button>
+        <button class="btn btn-danger" id="dialog-confirm" type="button">确认停止</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="login-view">
+    <div class="login-shell panel">
+      <div class="eyebrow mono">Codex · Control Deck</div>
+      <div class="login-title">把双池维护态<br>直接搬到桌面上。</div>
+      <div class="login-subtitle">
+        登录后可查看注册池 / OAuth 池 / CPA 库存 / 循环巡检倒计时，并直接编辑配置与跟踪实时日志。
+      </div>
+      <div class="field-stack">
+        <label>
+          <span class="field-label mono">X-Admin-Token</span>
+          <input id="token-input" type="password" placeholder="输入管理令牌" autocomplete="current-password">
+        </label>
+        <button id="login-btn" class="login-action" type="button">进入控制台</button>
+      </div>
+      <div id="login-error" class="login-error"></div>
+    </div>
+  </div>
+
+  <div id="app-view">
+    <div class="app-shell">
+      <aside class="sidebar panel">
+        <div class="sidebar-header">
+          <h2 class="sidebar-title">Configuration Forge</h2>
+          <div class="sidebar-desc">按标签快速编辑常用配置、邮箱池与高级 flow 参数。<kbd style="font-size:11px;padding:2px 5px;border-radius:4px;border:1px solid var(--border);background:rgba(255,255,255,0.04);">Ctrl+S</kbd> 快速保存。</div>
+        </div>
+        <div class="sidebar-tabs" id="config-tabs"></div>
+        <div class="sidebar-body">
+          <div id="config-root"></div>
+        </div>
+        <div class="sidebar-footer">
+          <button class="btn btn-primary" id="save-config-btn" type="button">保存配置</button>
+          <button class="btn" id="reload-config-btn" type="button">重新加载</button>
+        </div>
+      </aside>
+
+      <main class="content panel">
+        <div class="content-header">
+          <div class="header-grid">
+            <div>
+              <h1 class="content-title">Codex 双池运维面板</h1>
+              <div class="content-desc">实时监控注册池、OAuth 池、CPA 库存、维护轮次与运行时日志。</div>
+            </div>
+            <div class="action-row">
+              <div class="conn-indicator conn-off" id="conn-indicator">
+                <span class="conn-dot"></span>
+                <span class="mono" id="conn-text">Offline</span>
+              </div>
+              <button class="btn btn-primary" id="start-once-btn" type="button">Start Maintain</button>
+              <button class="btn btn-secondary" id="start-loop-btn" type="button">Start Loop</button>
+              <button class="btn btn-danger" id="stop-btn" type="button">Stop</button>
+              <button class="btn" id="logout-btn" type="button">Logout</button>
+            </div>
+          </div>
+          <div class="status-cluster" style="margin-top: 16px;">
+            <div id="status-chip" class="status-chip status-idle">
+              <span class="status-dot"></span>
+              <span id="status-text" class="mono">IDLE</span>
+            </div>
+            <div class="pill mono">Mode: <span id="mode-text">-</span></div>
+            <div class="pill mono">Phase: <span id="phase-text">idle</span></div>
+            <div class="pill mono">Round: <span id="round-text">0</span></div>
+            <div class="pill mono uptime-badge" id="uptime-pill">Uptime: <span id="uptime-text">00:00:00</span></div>
+            <div class="pill mono hidden" id="loop-pill">下次巡检: <span id="loop-countdown">0s</span></div>
+          </div>
+        </div>
+
+        <div class="content-body">
+          <section class="message-banner card">
+            <div class="message-main">
+              <div class="message-title mono">Maintain State</div>
+              <div class="message-copy" id="maintain-message">等待维护任务启动</div>
+            </div>
+            <div class="pill mono" id="cooldown-pill">Cooldown: <span id="cooldown-text">0</span></div>
+          </section>
+
+          <section class="metrics-grid">
+            <div class="metric-card">
+              <div class="metric-label mono">Register OK</div>
+              <div class="metric-value success" id="metric-reg-ok">0</div>
+              <div class="metric-note mono" id="metric-reg-rate">0.0 / min</div>
+              <div class="metric-bar"><div class="metric-bar-fill" id="reg-ok-bar" style="background:var(--success);width:0%"></div></div>
+            </div>
+            <div class="metric-card">
+              <div class="metric-label mono">Register Fail</div>
+              <div class="metric-value danger" id="metric-reg-fail">0</div>
+              <div class="metric-note mono" id="metric-pending">Queue 0</div>
+              <div class="metric-bar"><div class="metric-bar-fill" id="reg-fail-bar" style="background:var(--danger);width:0%"></div></div>
+            </div>
+            <div class="metric-card">
+              <div class="metric-label mono">OAuth OK</div>
+              <div class="metric-value success" id="metric-oauth-ok">0</div>
+              <div class="metric-note mono" id="metric-oauth-rate">0.0 / min</div>
+              <div class="metric-bar"><div class="metric-bar-fill" id="oauth-ok-bar" style="background:var(--success);width:0%"></div></div>
+            </div>
+            <div class="metric-card">
+              <div class="metric-label mono">OAuth Fail</div>
+              <div class="metric-value danger" id="metric-oauth-fail">0</div>
+              <div class="metric-note mono" id="metric-throughput">吞吐 --</div>
+              <div class="metric-bar"><div class="metric-bar-fill" id="oauth-fail-bar" style="background:var(--danger);width:0%"></div></div>
+            </div>
+          </section>
+
+          <section class="dashboard-grid">
+            <div class="stack">
+              <article class="card">
+                <div class="card-header">
+                  <div>
+                    <div class="card-title">Dual Pool Dashboard</div>
+                    <div class="card-subtitle">注册池 → 队列 → OAuth 池</div>
+                  </div>
+                  <div class="pill mono" id="success-rate-pill">成功率 --%</div>
+                </div>
+                <div class="dual-pool">
+                  <div class="pool-box">
+                    <div class="pool-head">
+                      <div>
+                        <div class="pool-name">Register Pool</div>
+                        <div class="card-subtitle mono">Workers <span id="register-workers">1</span></div>
+                      </div>
+                      <div class="pill mono">Rate <span id="register-rate-chip">0.0/min</span></div>
+                    </div>
+                    <div class="pool-stats">
+                      <div class="mini-stat">
+                        <div class="mini-label mono">Success</div>
+                        <div class="mini-value success" id="register-success">0</div>
+                      </div>
+                      <div class="mini-stat">
+                        <div class="mini-label mono">Failure</div>
+                        <div class="mini-value danger" id="register-failure">0</div>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="queue-box" id="queue-box">
+                    <div class="queue-inner">
+                      <div class="queue-count mono" id="queue-count">0</div>
+                      <div class="queue-label">Queue Pending</div>
+                    </div>
+                  </div>
+                  <div class="pool-box">
+                    <div class="pool-head">
+                      <div>
+                        <div class="pool-name">OAuth Pool</div>
+                        <div class="card-subtitle mono">Workers <span id="oauth-workers">1</span></div>
+                      </div>
+                      <div class="pill mono" id="oauth-active-pill">● Idle</div>
+                    </div>
+                    <div class="pool-stats">
+                      <div class="mini-stat">
+                        <div class="mini-label mono">Success</div>
+                        <div class="mini-value success" id="oauth-success">0</div>
+                      </div>
+                      <div class="mini-stat">
+                        <div class="mini-label mono">Failure</div>
+                        <div class="mini-value danger" id="oauth-failure">0</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </article>
+
+              <article class="card">
+                <div class="card-header">
+                  <div>
+                    <div class="card-title">CPA Inventory</div>
+                    <div class="card-subtitle">当前 candidates 与阈值对比</div>
+                  </div>
+                  <div class="pill mono" id="inventory-gap-pill">Gap 0</div>
+                </div>
+                <div class="inventory-summary">
+                  <div>
+                    <div class="message-title mono">Inventory</div>
+                    <div class="summary-strong" id="inventory-ratio">0 / 0</div>
+                  </div>
+                  <div class="pill mono" id="inventory-state-pill">等待数据</div>
+                </div>
+                <div class="inventory-track"><div class="inventory-fill" id="inventory-fill"></div></div>
+                <div class="inventory-scale mono"><span>0%</span><span>50%</span><span>80%</span><span>100%</span></div>
+              </article>
+
+              <article class="card" id="progress-card">
+                <div class="card-header">
+                  <div>
+                    <div class="card-title">Maintain Progress</div>
+                    <div class="card-subtitle">当前补号进度</div>
+                  </div>
+                  <div class="pill mono" id="progress-pill">0%</div>
+                </div>
+                <div class="progress-summary">
+                  <div>
+                    <div class="message-title mono">Completed</div>
+                    <div class="summary-strong" id="progress-ratio">0 / 0</div>
+                  </div>
+                  <div class="pill mono" id="progress-mode-pill">single</div>
+                </div>
+                <div class="progress-track"><div class="progress-fill" id="progress-fill"></div></div>
+                <div class="progress-scale mono"><span>0%</span><span>25%</span><span>50%</span><span>100%</span></div>
+              </article>
+            </div>
+
+            <div class="stack">
+              <article class="card">
+                <div class="card-header">
+                  <div>
+                    <div class="card-title">Single Account Timing</div>
+                    <div class="card-subtitle">最新值、均值与慢请求统计</div>
+                  </div>
+                  <div class="pill mono">Samples <span id="timing-samples">0</span></div>
+                </div>
+                <div class="timing-grid">
+                  <div class="timing-card">
+                    <div class="timing-label mono">Latest Register</div>
+                    <div class="timing-value accent" id="latest-reg">--</div>
+                  </div>
+                  <div class="timing-card">
+                    <div class="timing-label mono">Latest OAuth</div>
+                    <div class="timing-value accent" id="latest-oauth">--</div>
+                  </div>
+                  <div class="timing-card">
+                    <div class="timing-label mono">Latest Total</div>
+                    <div class="timing-value accent" id="latest-total">--</div>
+                  </div>
+                  <div class="timing-card">
+                    <div class="timing-label mono">Avg Register</div>
+                    <div class="timing-value info" id="avg-reg">--</div>
+                  </div>
+                  <div class="timing-card">
+                    <div class="timing-label mono">Avg OAuth</div>
+                    <div class="timing-value info" id="avg-oauth">--</div>
+                  </div>
+                  <div class="timing-card">
+                    <div class="timing-label mono">Avg Total</div>
+                    <div class="timing-value info" id="avg-total">--</div>
+                  </div>
+                </div>
+                <div class="inventory-scale mono" style="margin-top: 12px;">
+                  <span>Slow Count (≥ avg × 1.25)</span>
+                  <span id="slow-count">0</span>
+                </div>
+              </article>
+
+              <article class="card">
+                <div class="card-header">
+                  <div>
+                    <div class="card-title">Failure Breakdown</div>
+                    <div class="card-subtitle">按 category 统计，快速定位瓶颈</div>
+                  </div>
+                  <div class="pill mono" id="total-failures-pill">Total 0</div>
+                </div>
+                <div class="failure-list" id="failure-list"></div>
+              </article>
+            </div>
+          </section>
+
+          <section class="card logs-shell">
+            <div class="log-toolbar">
+              <div>
+                <div class="card-title">Live Logs</div>
+                <div class="card-subtitle">SSE 实时流 + 关键字着色</div>
+              </div>
+              <div class="log-actions">
+                <input type="text" class="log-search mono" id="log-search" placeholder="搜索日志...">
+                <button class="btn btn-sm" id="scroll-lock-btn" type="button" title="自动滚动">↓ Auto</button>
+                <button class="btn btn-sm" id="export-log-btn" type="button" title="导出日志">Export</button>
+                <button class="btn btn-sm" id="clear-log-btn" type="button">清空</button>
+              </div>
+            </div>
+            <div class="log-filter-row" id="log-filter-row">
+              <span class="filter-chip active" data-filter="all">ALL</span>
+              <span class="filter-chip" data-filter="log-success" style="color:var(--success)">Success</span>
+              <span class="filter-chip" data-filter="log-error" style="color:var(--danger)">Error</span>
+              <span class="filter-chip" data-filter="log-warning" style="color:var(--warning)">Warning</span>
+              <span class="filter-chip" data-filter="log-info" style="color:var(--info)">Info</span>
+            </div>
+            <div class="terminal" id="log-terminal"></div>
+          </section>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <script>
+    const AUTH_KEY = 'codex_admin_token';
+    const MAX_LOG_LINES = 500;
+    const POLL_INTERVAL = 4000;
+
+    const tabDefinitions = [
+      {
+        key: 'common',
+        label: '常用',
+        sections: [
+          {
+            key: 'runtime',
+            title: '基础运行',
+            fields: [
+              { path: 'total_accounts', label: '总账号数', type: 'number' },
+              { path: 'concurrent_workers', label: '默认并发', type: 'number' },
+              { path: 'register_workers', label: '注册池并发', type: 'number', hint: 'RunMaintainOnce / Loop / DualPool 直接使用该值。' },
+              { path: 'oauth_workers', label: 'OAuth 池并发', type: 'number', hint: '显式覆盖 OAuth pool worker 数；未设置时回退 account_record_workers。' },
+              { path: 'oauth_delay_seconds', label: 'OAuth 延迟秒', type: 'number' },
+              { path: 'proxy', label: '默认代理（top-level）', type: 'text' },
+              { path: 'run.proxy', label: '运行代理（run.proxy）', type: 'text', hint: '生效时优先级高于 top-level proxy。' },
+              { path: 'proxy_mode', label: '代理模式', type: 'select', options: ['direct', 'file'] },
+              { path: 'proxy_file', label: '代理文件', type: 'text' },
+              { path: 'name_prefix', label: '录入名称前缀', type: 'text' },
+              { path: 'dual_pool', label: 'CLI 双池模式默认启用', type: 'checkbox', hint: '主要供 cmd/codex 批量模式使用。' },
+              { path: 'workspace_record_workers', label: '空间录入并发', type: 'number' },
+              { path: 'workspace_login_workers', label: 'Workspace 登录并发', type: 'number' },
+              { path: 'account_record_workers', label: '账号并发默认值', type: 'number', hint: '主要用于 CLI 指定邮箱/批量录入模式默认值。' },
+              { path: 'pending_queue_file', label: 'Pending Queue File', type: 'text' },
+              { path: 'space_record_file', label: 'Space Record File', type: 'text' },
+            ],
+          },
+          {
+            key: 'maintainer',
+            title: 'CPA / 维护',
+            fields: [
+              { path: 'clean.base_url', label: 'CPA Base URL', type: 'text' },
+              { path: 'clean.token', label: 'CPA Token', type: 'password' },
+              { path: 'clean.target_type', label: 'Target Type', type: 'text' },
+              { path: 'clean.workers', label: '探测并发', type: 'number' },
+              { path: 'clean.delete_workers', label: '删除并发', type: 'number' },
+              { path: 'clean.timeout', label: '超时秒数', type: 'number' },
+              { path: 'clean.retries', label: '重试次数', type: 'number' },
+              { path: 'clean.user_agent', label: 'Probe User-Agent', type: 'text' },
+              { path: 'clean.used_percent_threshold', label: '用量阈值', type: 'number' },
+              { path: 'maintainer.min_candidates', label: '最低库存', type: 'number' },
+              { path: 'maintainer.loop_interval_seconds', label: '巡检间隔秒', type: 'number' },
+              { path: 'run.workers', label: 'run.workers', type: 'number', hint: '兼容字段；若 register_workers 未设置则作为注册池并发默认值。' },
+              { path: 'run.failure_threshold_for_cooldown', label: '冷却触发失败数', type: 'number' },
+              { path: 'run.failure_cooldown_seconds', label: '冷却秒数', type: 'number' },
+            ],
+          },
+        ],
+      },
+      {
+        key: 'mail',
+        label: '邮箱',
+        sections: [
+          {
+            key: 'mail-chain',
+            title: '邮箱链路',
+            fields: [
+              { path: 'mail_provider', label: '邮箱提供链名称', type: 'text', hint: '当前 Go 版核心链路仍以 tabmail → cfmail 为主，这里仅作为兼容字段展示。' },
+            ],
+          },
+          { key: 'cf', title: 'CF Mail Pools', kind: 'cf_mail_configs' },
+          {
+            key: 'legacy-cf',
+            title: 'Legacy CF Mail',
+            fields: [
+              { path: 'cf_worker_domain', label: 'Legacy Worker Domain', type: 'text', hint: '当 cf_mail_configs 为空时作为兜底。' },
+              { path: 'cf_email_domain', label: 'Legacy Email Domain', type: 'text' },
+              { path: 'cf_admin_password', label: 'Legacy Admin Password', type: 'password' },
+            ],
+          },
+        ],
+      },
+      {
+        key: 'advanced',
+        label: '高级',
+        sections: [
+          {
+            key: 'oauth',
+            title: 'OAuth',
+            fields: [
+              { path: 'oauth_issuer', label: 'OAuth Issuer', type: 'text' },
+              { path: 'oauth_client_id', label: 'Client ID', type: 'text' },
+              { path: 'oauth_redirect_uri', label: 'Redirect URI', type: 'text' },
+              { path: 'oauth_step2_max_retries', label: 'Step2 Max Retries', type: 'number' },
+              { path: 'oauth_step2_retry_base_seconds', label: 'Step2 Retry Base Seconds', type: 'number' },
+            ],
+          },
+          {
+            key: 'flow',
+            title: 'Flow / Retry',
+            fields: [
+              { path: 'flow.step_retry_attempts', label: 'Step Retry Attempts', type: 'number' },
+              { path: 'flow.step_retry_delay_base', label: 'Step Retry Delay Base', type: 'number' },
+              { path: 'flow.step_retry_delay_cap', label: 'Step Retry Delay Cap', type: 'number' },
+              { path: 'flow.outer_retry_attempts', label: 'OAuth Outer Retries', type: 'number' },
+              { path: 'flow.retry_backoff_base', label: 'Retry Backoff Base', type: 'number' },
+              { path: 'flow.retry_backoff_max', label: 'Retry Backoff Max', type: 'number' },
+              { path: 'flow.transient_markers', label: 'Transient Markers', type: 'string_list', hint: '逗号分隔，保存时写回 []string。' },
+              { path: 'flow.otp_validate_order', label: 'OTP Validate Order', type: 'string_list', hint: '例如 normal,sentinel' },
+            ],
+          },
+          {
+            key: 'registration',
+            title: 'Registration',
+            fields: [
+              { path: 'registration.entry_mode', label: 'Entry Mode', type: 'select', options: ['direct_auth', 'chatgpt_web'] },
+              { path: 'registration.entry_mode_fallback', label: 'Entry Fallback', type: 'checkbox' },
+            ],
+          },
+          {
+            key: 'output',
+            title: 'Output',
+            fields: [
+              { path: 'output.accounts_file', label: 'Accounts File', type: 'text', hint: '保存时自动同步到顶层 accounts_file。' },
+              { path: 'output.csv_file', label: 'CSV File', type: 'text', hint: '保存时自动同步到顶层 csv_file。' },
+              { path: 'output.ak_file', label: 'AK File', type: 'text', hint: '保存时自动同步到顶层 ak_file。' },
+              { path: 'output.rk_file', label: 'RK File', type: 'text', hint: '保存时自动同步到顶层 rk_file。' },
+              { path: 'output.save_local', label: 'Save Local', type: 'checkbox' },
+            ],
+          },
+        ],
+      },
+    ];
+
+    /* ── State ── */
+    const state = {
+      token: '',
+      config: {},
+      activeTab: 'common',
+      runtime: null,
+      pollTimer: null,
+      countdownTimer: null,
+      uptimeTimer: null,
+      stream: null,
+      logLines: [],
+      logFilter: 'all',
+      logSearch: '',
+      autoScroll: true,
+      sseConnected: false,
+      dialogResolve: null,
+      pollFailCount: 0,
+    };
+
+    const $ = (id) => document.getElementById(id);
+
+    /* ── Utilities ── */
+    function escapeHtml(value) {
+      return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    }
+
+    function debounce(fn, ms) {
+      let timer;
+      return (...args) => {
+        clearTimeout(timer);
+        timer = setTimeout(() => fn(...args), ms);
+      };
+    }
+
+    function formatUptime(seconds) {
+      if (!seconds || seconds <= 0) return '00:00:00';
+      const h = Math.floor(seconds / 3600);
+      const m = Math.floor((seconds % 3600) / 60);
+      const s = Math.floor(seconds % 60);
+      return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+    }
+
+    function formatSeconds(value) {
+      if (value === null || value === undefined || value === '' || Number.isNaN(Number(value))) return '--';
+      return `${Number(value).toFixed(1)}s`;
+    }
+
+    function formatRate(count, uptimeSeconds) {
+      const minutes = Number(uptimeSeconds || 0) / 60;
+      if (!minutes || minutes <= 0) return '0.0/min';
+      return `${(Number(count || 0) / minutes).toFixed(1)}/min`;
+    }
+
+    /* ── Toast System ── */
+    function toast(message, tone = 'info', duration = 3500) {
+      const container = $('toast-container');
+      const el = document.createElement('div');
+      el.className = `toast toast-${tone}`;
+      el.innerHTML = `<span class="toast-dot"></span><span>${escapeHtml(message)}</span>`;
+      container.appendChild(el);
+      setTimeout(() => {
+        el.classList.add('removing');
+        setTimeout(() => el.remove(), 250);
+      }, duration);
+    }
+
+    /* ── Confirm Dialog ── */
+    function showDialog(title, desc) {
+      return new Promise((resolve) => {
+        $('dialog-title').textContent = title;
+        $('dialog-desc').textContent = desc;
+        $('dialog-overlay').classList.add('show');
+        state.dialogResolve = resolve;
+      });
+    }
+
+    function closeDialog(result) {
+      $('dialog-overlay').classList.remove('show');
+      if (state.dialogResolve) {
+        state.dialogResolve(result);
+        state.dialogResolve = null;
+      }
+    }
+
+    /* ── Connection Indicator ── */
+    function setConnectionState(mode) {
+      const el = $('conn-indicator');
+      const text = $('conn-text');
+      el.className = 'conn-indicator';
+      if (mode === 'live') {
+        el.classList.add('conn-live');
+        text.textContent = 'SSE Live';
+      } else if (mode === 'poll') {
+        el.classList.add('conn-poll');
+        text.textContent = 'Polling';
+      } else {
+        el.classList.add('conn-off');
+        text.textContent = 'Offline';
+      }
+    }
+
+    /* ── Auth ── */
+    function getStoredToken() { return window.sessionStorage.getItem(AUTH_KEY) || ''; }
+    function setStoredToken(token) { window.sessionStorage.setItem(AUTH_KEY, token); }
+    function clearStoredToken() { window.sessionStorage.removeItem(AUTH_KEY); }
+
+    async function apiFetch(path, options = {}) {
+      const headers = { ...(options.headers || {}) };
+      if (state.token) headers['X-Admin-Token'] = state.token;
+      if (!(options.body instanceof FormData)) headers['Content-Type'] = 'application/json';
+      const response = await fetch(path, { ...options, headers });
+      const payload = await response.json().catch(() => ({}));
+      if (response.status === 401 || response.status === 403) {
+        logout();
+        throw new Error('unauthorized');
+      }
+      if (!response.ok) throw new Error(payload.error || payload.message || `request_failed_${response.status}`);
+      return payload;
+    }
+
+    async function verifyToken(token) {
+      const response = await fetch('/api/auth/verify', { headers: { 'X-Admin-Token': token } });
+      if (!response.ok) throw new Error('invalid token');
+      return response.json();
+    }
+
+    function showLogin(error = '') {
+      $('app-view').style.display = 'none';
+      $('login-view').style.display = 'flex';
+      $('login-error').textContent = error;
+      stopPolling();
+      disconnectStream();
+      setConnectionState('off');
+    }
+
+    function showApp() {
+      $('login-view').style.display = 'none';
+      $('app-view').style.display = 'block';
+    }
+
+    async function login() {
+      const token = $('token-input').value.trim();
+      if (!token) { $('login-error').textContent = '请输入管理令牌'; return; }
+      $('login-error').textContent = '';
+      $('login-btn').disabled = true;
+      try {
+        await verifyToken(token);
+        state.token = token;
+        setStoredToken(token);
+        showApp();
+        await bootstrapApp();
+      } catch (error) {
+        $('login-error').textContent = '令牌无效或服务不可达';
+      } finally {
+        $('login-btn').disabled = false;
+      }
+    }
+
+    function logout() {
+      clearStoredToken();
+      state.token = '';
+      state.runtime = null;
+      state.logLines = [];
+      renderLogs();
+      showLogin('登录已失效，请重新输入管理令牌');
+    }
+
+    /* ── Config Helpers ── */
+    function getValue(path, fallback = '') {
+      return path.split('.').reduce((acc, key) => (acc && acc[key] !== undefined ? acc[key] : undefined), state.config) ?? fallback;
+    }
+
+    function ensureBranch(path) {
+      const parts = path.split('.');
+      let current = state.config;
+      for (let i = 0; i < parts.length - 1; i++) {
+        const key = parts[i];
+        if (!current[key] || typeof current[key] !== 'object' || Array.isArray(current[key])) current[key] = {};
+        current = current[key];
+      }
+      return { current, key: parts[parts.length - 1] };
+    }
+
+    function setValue(path, rawValue, type) {
+      const target = ensureBranch(path);
+      if (type === 'checkbox') { target.current[target.key] = Boolean(rawValue); return; }
+      if (type === 'number') { target.current[target.key] = rawValue === '' ? 0 : Number(rawValue); return; }
+      if (type === 'string_list') {
+        if (Array.isArray(rawValue)) { target.current[target.key] = rawValue; return; }
+        target.current[target.key] = String(rawValue).split(',').map((item) => item.trim()).filter(Boolean);
+        return;
+      }
+      target.current[target.key] = rawValue;
+    }
+
+    function displayValue(field) {
+      const value = getValue(field.path, field.type === 'checkbox' ? false : '');
+      if (field.type === 'string_list') return Array.isArray(value) ? value.join(',') : String(value || '');
+      if (field.type === 'checkbox') return Boolean(value);
+      return value ?? '';
+    }
+
+    function pickDefined(...values) {
+      for (const value of values) {
+        if (value !== undefined && value !== null && value !== '') return value;
+      }
+      return undefined;
+    }
+
+    function hydrateConfigForUI(config) {
+      const next = config || {};
+      if (!next.clean) next.clean = {};
+      if (!next.maintainer) next.maintainer = {};
+      if (!next.run) next.run = {};
+      if (!next.flow) next.flow = {};
+      if (!next.registration) next.registration = {};
+      if (!next.output) next.output = {};
+      if (!Array.isArray(next.cf_mail_configs)) next.cf_mail_configs = [];
+
+      const outputPairs = [['accounts_file','accounts_file'],['csv_file','csv_file'],['ak_file','ak_file'],['rk_file','rk_file']];
+      outputPairs.forEach(([nestedKey, topLevelKey]) => {
+        const effective = pickDefined(next.output[nestedKey], next[topLevelKey]);
+        if (effective !== undefined) { next.output[nestedKey] = effective; next[topLevelKey] = effective; }
+      });
+
+      next.register_workers = pickDefined(next.register_workers, next.run.workers, next.concurrent_workers, 1);
+      next.oauth_workers = pickDefined(next.oauth_workers, next.account_record_workers, 1);
+      next.oauth_delay_seconds = pickDefined(next.oauth_delay_seconds, 0);
+      next.pending_queue_file = pickDefined(next.pending_queue_file, 'pending_oauth.json');
+      next.space_record_file = pickDefined(next.space_record_file, 'space_record_status.json');
+      next.name_prefix = pickDefined(next.name_prefix, 'free');
+      next.oauth_step2_max_retries = pickDefined(next.oauth_step2_max_retries, 5);
+      next.oauth_step2_retry_base_seconds = pickDefined(next.oauth_step2_retry_base_seconds, 2);
+      if (next.dual_pool === undefined) next.dual_pool = false;
+      if (next.output.save_local === undefined) next.output.save_local = true;
+      return next;
+    }
+
+    function buildPayloadForSave() {
+      const payload = JSON.parse(JSON.stringify(state.config || {}));
+      hydrateConfigForUI(payload);
+      const outputPairs = [['accounts_file','accounts_file'],['csv_file','csv_file'],['ak_file','ak_file'],['rk_file','rk_file']];
+      outputPairs.forEach(([nestedKey, topLevelKey]) => {
+        const effective = pickDefined(payload.output[nestedKey], payload[topLevelKey], '');
+        payload.output[nestedKey] = effective;
+        payload[topLevelKey] = effective;
+      });
+      return payload;
+    }
+
+    /* ── Config Rendering ── */
+    function renderTabs() {
+      $('config-tabs').innerHTML = tabDefinitions.map((tab) => {
+        const active = state.activeTab === tab.key ? 'active' : '';
+        return `<button type="button" class="tab-btn ${active}" data-tab="${tab.key}">${tab.label}</button>`;
+      }).join('');
+      $('config-tabs').querySelectorAll('[data-tab]').forEach((button) => {
+        button.addEventListener('click', () => {
+          state.activeTab = button.dataset.tab;
+          renderConfigPanel();
+          renderTabs();
+        });
+      });
+    }
+
+    function renderField(field) {
+      if (field.type === 'checkbox') {
+        return `
+          <label class="checkbox-row">
+            <input type="checkbox" data-path="${field.path}" data-type="${field.type}" ${displayValue(field) ? 'checked' : ''}>
+            <div>
+              <div class="config-caption">${field.label}</div>
+              ${field.hint ? `<div class="config-hint">${field.hint}</div>` : ''}
+            </div>
+          </label>`;
+      }
+      const value = displayValue(field);
+      const inputTag = field.type === 'textarea' || field.type === 'string_list' ? 'textarea' : 'input';
+      const typeAttr = field.type === 'password' ? 'password' : field.type === 'number' ? 'number' : 'text';
+      if (field.type === 'select') {
+        return `
+          <div class="config-row">
+            <div class="config-caption">${field.label}</div>
+            <select data-path="${field.path}" data-type="${field.type}">
+              ${(field.options || []).map((opt) => `<option value="${opt}" ${String(value) === String(opt) ? 'selected' : ''}>${opt}</option>`).join('')}
+            </select>
+            ${field.hint ? `<div class="config-hint">${field.hint}</div>` : ''}
+          </div>`;
+      }
+      if (inputTag === 'textarea') {
+        return `
+          <div class="config-row">
+            <div class="config-caption">${field.label}</div>
+            <textarea data-path="${field.path}" data-type="${field.type}" placeholder="${field.placeholder || ''}">${escapeHtml(value)}</textarea>
+            ${field.hint ? `<div class="config-hint">${field.hint}</div>` : ''}
+          </div>`;
+      }
+      return `
+        <div class="config-row">
+          <div class="config-caption">${field.label}</div>
+          <input data-path="${field.path}" data-type="${field.type}" type="${typeAttr}" value="${escapeHtml(value)}" placeholder="${field.placeholder || ''}">
+          ${field.hint ? `<div class="config-hint">${field.hint}</div>` : ''}
+        </div>`;
+    }
+
+    function renderCFConfigs() {
+      const list = Array.isArray(state.config.cf_mail_configs) ? state.config.cf_mail_configs : [];
+      if (list.length === 0) {
+        state.config.cf_mail_configs = [{ name: 'cfmail-1', worker_domain: '', email_domain: '', admin_password: '' }];
+      }
+      const items = state.config.cf_mail_configs.map((item, index) => `
+        <div class="cf-item" data-cf-index="${index}">
+          <div class="cf-head">
+            <div class="cf-name mono">Pool #${index + 1} · ${escapeHtml(item.name || `cfmail-${index + 1}`)}</div>
+            <button type="button" class="btn-link" data-remove-cf="${index}">删除</button>
+          </div>
+          <div class="config-row"><div class="config-caption">名称</div><input data-cf-field="name" data-cf-index="${index}" type="text" value="${escapeHtml(item.name || '')}"></div>
+          <div class="config-row"><div class="config-caption">Worker Domain</div><input data-cf-field="worker_domain" data-cf-index="${index}" type="text" value="${escapeHtml(item.worker_domain || '')}"></div>
+          <div class="config-row"><div class="config-caption">Email Domain</div><input data-cf-field="email_domain" data-cf-index="${index}" type="text" value="${escapeHtml(item.email_domain || '')}"></div>
+          <div class="config-row"><div class="config-caption">Admin Password</div><input data-cf-field="admin_password" data-cf-index="${index}" type="password" value="${escapeHtml(item.admin_password || '')}"></div>
+        </div>
+      `).join('');
+      return `<div class="cf-list">${items}</div><button type="button" class="btn" id="add-cf-btn">新增 CF Mail Pool</button>`;
+    }
+
+    function renderConfigPanel() {
+      const tab = tabDefinitions.find((item) => item.key === state.activeTab) || tabDefinitions[0];
+      $('config-root').innerHTML = tab.sections.map((section) => {
+        const body = section.kind === 'cf_mail_configs' ? renderCFConfigs() : section.fields.map(renderField).join('');
+        return `
+          <details class="config-group" open>
+            <summary>
+              <span>${section.title}</span>
+              <span class="mono" style="color: var(--text-muted); font-size: 11px;">${section.kind === 'cf_mail_configs' ? 'dynamic' : 'config'}</span>
+            </summary>
+            <div class="config-group-body">${body}</div>
+          </details>`;
+      }).join('');
+
+      $('config-root').querySelectorAll('[data-path]').forEach((input) => {
+        const handler = input.type === 'checkbox' ? 'change' : 'input';
+        input.addEventListener(handler, () => {
+          setValue(input.dataset.path, input.type === 'checkbox' ? input.checked : input.value, input.dataset.type);
+        });
+      });
+
+      $('config-root').querySelectorAll('[data-cf-field]').forEach((input) => {
+        input.addEventListener('input', () => {
+          const index = Number(input.dataset.cfIndex);
+          if (!Array.isArray(state.config.cf_mail_configs)) state.config.cf_mail_configs = [];
+          state.config.cf_mail_configs[index] = state.config.cf_mail_configs[index] || {};
+          state.config.cf_mail_configs[index][input.dataset.cfField] = input.value;
+        });
+      });
+
+      $('config-root').querySelectorAll('[data-remove-cf]').forEach((button) => {
+        button.addEventListener('click', () => {
+          const index = Number(button.dataset.removeCf);
+          if (Array.isArray(state.config.cf_mail_configs)) {
+            state.config.cf_mail_configs.splice(index, 1);
+            renderConfigPanel();
+          }
+        });
+      });
+
+      const addCfButton = $('add-cf-btn');
+      if (addCfButton) {
+        addCfButton.addEventListener('click', () => {
+          if (!Array.isArray(state.config.cf_mail_configs)) state.config.cf_mail_configs = [];
+          state.config.cf_mail_configs.push({ name: `cfmail-${state.config.cf_mail_configs.length + 1}`, worker_domain: '', email_domain: '', admin_password: '' });
+          renderConfigPanel();
+        });
+      }
+    }
+
+    async function loadConfig() {
+      const payload = await apiFetch('/api/config');
+      state.config = hydrateConfigForUI(payload || {});
+      renderTabs();
+      renderConfigPanel();
+    }
+
+    async function saveConfig() {
+      try {
+        const payload = buildPayloadForSave();
+        await apiFetch('/api/config', { method: 'POST', body: JSON.stringify(payload) });
+        toast('配置已保存', 'success');
+        await loadConfig();
+      } catch (error) {
+        toast(`保存失败：${error.message}`, 'danger', 5000);
+      }
+    }
+
+    /* ── Runtime Helpers ── */
+    function getRegisterWorkers() {
+      return Number(getValue('register_workers', getValue('run.workers', getValue('concurrent_workers', 1))) || 1);
+    }
+
+    function getOAuthWorkers() {
+      return Number(getValue('oauth_workers', getValue('account_record_workers', 1)) || 1);
+    }
+
+    function statusTone(runtime) {
+      if (!runtime) return { label: 'IDLE', cls: 'status-idle' };
+      if (runtime.running) return { label: runtime.mode === 'loop' ? 'LOOP RUNNING' : 'RUNNING', cls: 'status-running' };
+      if (runtime.phase === 'completed') return { label: 'COMPLETED', cls: 'status-completed' };
+      if (runtime.phase === 'stopped') return { label: 'STOPPED', cls: 'status-stopped' };
+      if (runtime.phase === 'failed') return { label: 'FAILED', cls: 'status-failed' };
+      return { label: 'IDLE', cls: 'status-idle' };
+    }
+
+    /* ── Failure Breakdown with Bars ── */
+    function renderFailureList(failures = {}) {
+      const entries = Object.entries(failures || {}).sort((a, b) => Number(b[1]) - Number(a[1]));
+      const totalFailures = entries.reduce((sum, [, v]) => sum + Number(v || 0), 0);
+      $('total-failures-pill').textContent = `Total ${totalFailures}`;
+
+      if (!entries.length) {
+        $('failure-list').innerHTML = '<div class="failure-row"><div class="failure-name">暂无失败样本</div><div class="failure-bar"><div class="failure-bar-fill" style="width:0%"></div></div><div class="failure-value info">0</div></div>';
+        return;
+      }
+      $('failure-list').innerHTML = entries.map(([key, value]) => {
+        const percent = totalFailures > 0 ? (Number(value) / totalFailures * 100) : 0;
+        return `
+          <div class="failure-row">
+            <div class="failure-name mono">${escapeHtml(key)}</div>
+            <div class="failure-bar"><div class="failure-bar-fill" style="width:${percent}%"></div></div>
+            <div class="failure-value danger">${Number(value || 0)}</div>
+          </div>`;
+      }).join('');
+    }
+
+    /* ── Log System ── */
+    function classifyLog(line) {
+      const lower = String(line || '').toLowerCase();
+      if (/✅|成功|completed|complete|录入成功/.test(line) || lower.includes('success')) return 'log-success';
+      if (/❌|失败|failed|error|panic/.test(line) || lower.includes('error')) return 'log-error';
+      if (/⚠️|警告|timeout|cooldown|冷却|warn/.test(line) || lower.includes('timeout')) return 'log-warning';
+      if (/📊|统计|巡检|inventory|queue|progress/.test(line) || lower.includes('candidates')) return 'log-info';
+      return 'log-muted';
+    }
+
+    function highlightSearch(text, query) {
+      if (!query) return escapeHtml(text);
+      const escaped = escapeHtml(text);
+      const safeQuery = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      try {
+        return escaped.replace(new RegExp(`(${safeQuery})`, 'gi'), '<span class="log-match">$1</span>');
+      } catch { return escaped; }
+    }
+
+    function renderLogs() {
+      const terminal = $('log-terminal');
+      const nearBottom = state.autoScroll && (terminal.scrollHeight - terminal.scrollTop - terminal.clientHeight < 60);
+      const filter = state.logFilter;
+      const search = state.logSearch.toLowerCase();
+
+      let lines = state.logLines;
+      if (filter !== 'all') {
+        lines = lines.filter((line) => classifyLog(line) === filter);
+      }
+      if (search) {
+        lines = lines.filter((line) => line.toLowerCase().includes(search));
+      }
+
+      if (lines.length === 0) {
+        terminal.innerHTML = '<div class="log-empty">暂无匹配日志</div>';
+        return;
+      }
+
+      const fragment = document.createDocumentFragment();
+      lines.forEach((line, index) => {
+        const div = document.createElement('div');
+        const cls = classifyLog(line);
+        div.className = `log-line ${cls}`;
+        const searchQuery = state.logSearch;
+        div.innerHTML = `<div class="log-index mono">${index + 1}</div><div class="log-content">${highlightSearch(line, searchQuery)}</div>`;
+        fragment.appendChild(div);
+      });
+      terminal.innerHTML = '';
+      terminal.appendChild(fragment);
+
+      if (nearBottom) terminal.scrollTop = terminal.scrollHeight;
+    }
+
+    const debouncedRenderLogs = debounce(renderLogs, 80);
+
+    function setLogs(lines) {
+      state.logLines = (lines || []).map((line) => String(line || '')).slice(-MAX_LOG_LINES);
+      debouncedRenderLogs();
+    }
+
+    function appendLog(line) {
+      const value = String(line || '');
+      if (!value) return;
+      state.logLines.push(value);
+      if (state.logLines.length > MAX_LOG_LINES) state.logLines = state.logLines.slice(-MAX_LOG_LINES);
+      debouncedRenderLogs();
+    }
+
+    function exportLogs() {
+      if (!state.logLines.length) { toast('暂无日志可导出', 'warning'); return; }
+      const blob = new Blob([state.logLines.join('\n')], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `codex-logs-${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.txt`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast('日志已导出', 'success');
+    }
+
+    /* ── Runtime Rendering ── */
+    function renderRuntime(runtime) {
+      state.runtime = runtime;
+      const stats = runtime?.stats || {};
+      const maintain = runtime?.maintain || {};
+      const timing = maintain.single_account_timing || {};
+      const tone = statusTone(runtime);
+
+      // Status
+      $('status-chip').className = `status-chip ${tone.cls}`;
+      $('status-text').textContent = tone.label;
+      $('mode-text').textContent = runtime?.mode || '-';
+      $('phase-text').textContent = runtime?.phase || 'idle';
+      $('round-text').textContent = String(maintain.loop_round || 0);
+      $('uptime-text').textContent = formatUptime(stats.uptime_seconds);
+
+      // Maintain message
+      $('maintain-message').textContent = maintain.message || '等待维护任务启动';
+      const cooldown = maintain.cooldown || {};
+      const cooldownStr = `${cooldown.consecutive_failures || 0}${cooldown.is_cooling_down ? ' · cooling' : ''}`;
+      $('cooldown-text').textContent = cooldownStr;
+      $('cooldown-pill').style.borderColor = cooldown.is_cooling_down ? 'rgba(255,211,108,0.3)' : 'var(--border)';
+
+      // Loop countdown
+      const loopSeconds = Number(maintain.loop_next_check_in_seconds || 0);
+      $('loop-pill').classList.toggle('hidden', !(runtime?.mode === 'loop' && loopSeconds > 0));
+      $('loop-countdown').textContent = `${loopSeconds}s`;
+
+      // Metrics
+      const regOk = Number(stats.reg_ok || 0);
+      const regFail = Number(stats.reg_fail || 0);
+      const oauthOk = Number(stats.oauth_ok || 0);
+      const oauthFail = Number(stats.oauth_fail || 0);
+      const totalOps = regOk + regFail + oauthOk + oauthFail;
+
+      $('metric-reg-ok').textContent = regOk;
+      $('metric-reg-fail').textContent = regFail;
+      $('metric-oauth-ok').textContent = oauthOk;
+      $('metric-oauth-fail').textContent = oauthFail;
+      $('metric-reg-rate').textContent = formatRate(regOk, stats.uptime_seconds);
+      $('metric-oauth-rate').textContent = formatRate(oauthOk, stats.uptime_seconds);
+      $('metric-pending').textContent = `Queue ${Number(maintain.pending_count || 0)}`;
+      $('metric-throughput').textContent = stats.throughput_per_account ? `吞吐 ${Number(stats.throughput_per_account).toFixed(1)}s/个` : '吞吐 --';
+
+      // Metric bars (proportional to total)
+      if (totalOps > 0) {
+        $('reg-ok-bar').style.width = `${(regOk / totalOps) * 100}%`;
+        $('reg-fail-bar').style.width = `${(regFail / totalOps) * 100}%`;
+        $('oauth-ok-bar').style.width = `${(oauthOk / totalOps) * 100}%`;
+        $('oauth-fail-bar').style.width = `${(oauthFail / totalOps) * 100}%`;
+      } else {
+        $('reg-ok-bar').style.width = '0%';
+        $('reg-fail-bar').style.width = '0%';
+        $('oauth-ok-bar').style.width = '0%';
+        $('oauth-fail-bar').style.width = '0%';
+      }
+
+      // Success rate
+      const totalAttempts = regOk + regFail;
+      const successRate = totalAttempts > 0 ? ((regOk / totalAttempts) * 100).toFixed(1) : '--';
+      $('success-rate-pill').textContent = `成功率 ${successRate}%`;
+
+      // Dual Pool
+      $('register-workers').textContent = getRegisterWorkers();
+      $('oauth-workers').textContent = getOAuthWorkers();
+      $('register-rate-chip').textContent = formatRate(regOk, stats.uptime_seconds);
+      $('register-success').textContent = regOk;
+      $('register-failure').textContent = regFail;
+      $('oauth-success').textContent = oauthOk;
+      $('oauth-failure').textContent = oauthFail;
+      const pendingCount = Number(maintain.pending_count || 0);
+      $('queue-count').textContent = pendingCount;
+      $('queue-box').classList.toggle('has-items', pendingCount > 0);
+      $('oauth-active-pill').textContent = maintain.oauth_pool_active ? '● Active' : '● Idle';
+      $('oauth-active-pill').style.color = maintain.oauth_pool_active ? 'var(--success)' : 'var(--text-dim)';
+
+      // Inventory
+      const candidates = Number(maintain.available_candidates || 0);
+      const minCandidates = Number(maintain.min_candidates || 0);
+      const inventoryRatio = minCandidates > 0 ? Math.min((candidates / minCandidates) * 100, 100) : 0;
+      const inventoryGap = Math.max(minCandidates - candidates, 0);
+      const inventoryFill = $('inventory-fill');
+      inventoryFill.style.width = `${inventoryRatio}%`;
+      let inventoryColor, inventoryText;
+      if (inventoryRatio >= 80) {
+        inventoryColor = 'linear-gradient(90deg, var(--success), #7dffd0)';
+        inventoryText = '库存充足';
+      } else if (inventoryRatio >= 50) {
+        inventoryColor = 'linear-gradient(90deg, var(--warning), #ffd98c)';
+        inventoryText = '需要补号';
+      } else {
+        inventoryColor = 'linear-gradient(90deg, var(--danger), #ff9b5d)';
+        inventoryText = '库存紧急';
+      }
+      inventoryFill.style.background = inventoryColor;
+      $('inventory-ratio').textContent = `${candidates} / ${minCandidates}`;
+      $('inventory-gap-pill').textContent = `Gap ${inventoryGap}`;
+      $('inventory-state-pill').textContent = inventoryText;
+
+      // Progress
+      const completed = Number(maintain.completed || 0);
+      const total = Number(maintain.total || 0);
+      const percent = Number(maintain.percent || 0);
+      $('progress-ratio').textContent = `${completed} / ${total}`;
+      $('progress-pill').textContent = `${percent}%`;
+      $('progress-mode-pill').textContent = runtime?.mode || 'once';
+      $('progress-fill').style.width = `${Math.max(0, Math.min(percent, 100))}%`;
+      $('progress-fill').style.background = total > 0
+        ? 'linear-gradient(90deg, var(--accent), var(--accent-2))'
+        : 'linear-gradient(90deg, rgba(255,255,255,0.08), rgba(255,255,255,0.08))';
+
+      // Timing
+      $('latest-reg').textContent = formatSeconds(timing.latest_reg_seconds);
+      $('latest-oauth').textContent = formatSeconds(timing.latest_oauth_seconds);
+      $('latest-total').textContent = formatSeconds(timing.latest_total_seconds);
+      $('avg-reg').textContent = formatSeconds(timing.recent_avg_reg_seconds);
+      $('avg-oauth').textContent = formatSeconds(timing.recent_avg_oauth_seconds);
+      $('avg-total').textContent = formatSeconds(timing.recent_avg_total_seconds);
+      $('timing-samples').textContent = Number(timing.sample_size || 0);
+      $('slow-count').textContent = Number(timing.recent_slow_count || 0);
+
+      // Failures
+      renderFailureList(stats.failures || {});
+
+      // Logs from status poll (SSE is primary, poll is fallback)
+      if (Array.isArray(runtime?.logs) && !state.sseConnected) {
+        setLogs(runtime.logs);
+      }
+    }
+
+    /* ── Polling & Streaming ── */
+    async function fetchRuntime() {
+      try {
+        const runtime = await apiFetch('/api/runtime/status');
+        renderRuntime(runtime);
+        state.pollFailCount = 0;
+        if (!state.sseConnected) setConnectionState('poll');
+      } catch (error) {
+        state.pollFailCount++;
+        if (state.pollFailCount >= 3 && !state.sseConnected) {
+          setConnectionState('off');
+        }
+      }
+    }
+
+    function startPolling() {
+      stopPolling();
+      fetchRuntime();
+      state.pollTimer = window.setInterval(fetchRuntime, POLL_INTERVAL);
+      state.countdownTimer = window.setInterval(() => {
+        if (!state.runtime || !state.runtime.maintain) return;
+        const maintain = state.runtime.maintain;
+        if (maintain.loop_next_check_in_seconds > 0) {
+          maintain.loop_next_check_in_seconds -= 1;
+          $('loop-countdown').textContent = `${maintain.loop_next_check_in_seconds}s`;
+          $('loop-pill').classList.toggle('hidden', !(state.runtime.mode === 'loop' && maintain.loop_next_check_in_seconds > 0));
+        }
+      }, 1000);
+
+      // Uptime local tick
+      state.uptimeTimer = window.setInterval(() => {
+        if (state.runtime?.stats?.uptime_seconds > 0 && state.runtime?.running) {
+          state.runtime.stats.uptime_seconds += 1;
+          $('uptime-text').textContent = formatUptime(state.runtime.stats.uptime_seconds);
+        }
+      }, 1000);
+    }
+
+    function stopPolling() {
+      if (state.pollTimer) window.clearInterval(state.pollTimer);
+      if (state.countdownTimer) window.clearInterval(state.countdownTimer);
+      if (state.uptimeTimer) window.clearInterval(state.uptimeTimer);
+      state.pollTimer = null;
+      state.countdownTimer = null;
+      state.uptimeTimer = null;
+    }
+
+    function connectStream() {
+      disconnectStream();
+      if (!state.token) return;
+      const stream = new EventSource(`/api/logs/stream?token=${encodeURIComponent(state.token)}`);
+      stream.onopen = () => {
+        state.sseConnected = true;
+        setConnectionState('live');
+      };
+      stream.onmessage = (event) => appendLog(event.data);
+      stream.onerror = () => {
+        state.sseConnected = false;
+        if (state.pollFailCount >= 3) {
+          setConnectionState('off');
+        } else {
+          setConnectionState('poll');
+        }
+      };
+      state.stream = stream;
+    }
+
+    function disconnectStream() {
+      if (state.stream) {
+        state.stream.close();
+        state.stream = null;
+      }
+      state.sseConnected = false;
+    }
+
+    /* ── Actions ── */
+    async function startRuntime(mode) {
+      const path = mode === 'loop' ? '/api/runtime/start-loop' : '/api/runtime/start';
+      try {
+        const response = await apiFetch(path, { method: 'POST', body: '{}' });
+        toast(response.message || '任务已启动', 'success');
+        await fetchRuntime();
+      } catch (error) {
+        toast(`启动失败：${error.message}`, 'danger', 5000);
+      }
+    }
+
+    async function stopRuntime() {
+      const confirmed = await showDialog('确认停止', '停止后当前运行中的 worker 将被取消，已完成的账号不受影响。确认要停止维护任务吗？');
+      if (!confirmed) return;
+      try {
+        const response = await apiFetch('/api/runtime/stop', { method: 'POST', body: '{}' });
+        toast(response.message || '停止中', 'warning');
+        await fetchRuntime();
+      } catch (error) {
+        toast(`停止失败：${error.message}`, 'danger', 5000);
+      }
+    }
+
+    /* ── Bootstrap ── */
+    async function bootstrapApp() {
+      toast('控制台已连接', 'success');
+      await loadConfig();
+      startPolling();
+      connectStream();
+    }
+
+    function bindEvents() {
+      // Login
+      $('login-btn').addEventListener('click', login);
+      $('token-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') login(); });
+
+      // Config
+      $('save-config-btn').addEventListener('click', saveConfig);
+      $('reload-config-btn').addEventListener('click', async () => {
+        try { await loadConfig(); toast('配置已重新加载', 'info'); }
+        catch (error) { toast(`重新加载失败：${error.message}`, 'danger'); }
+      });
+
+      // Runtime
+      $('start-once-btn').addEventListener('click', () => startRuntime('once'));
+      $('start-loop-btn').addEventListener('click', () => startRuntime('loop'));
+      $('stop-btn').addEventListener('click', stopRuntime);
+      $('logout-btn').addEventListener('click', logout);
+
+      // Dialog
+      $('dialog-confirm').addEventListener('click', () => closeDialog(true));
+      $('dialog-cancel').addEventListener('click', () => closeDialog(false));
+      $('dialog-overlay').addEventListener('click', (e) => { if (e.target === $('dialog-overlay')) closeDialog(false); });
+
+      // Logs
+      $('clear-log-btn').addEventListener('click', () => { state.logLines = []; renderLogs(); });
+      $('export-log-btn').addEventListener('click', exportLogs);
+      $('scroll-lock-btn').addEventListener('click', () => {
+        state.autoScroll = !state.autoScroll;
+        const btn = $('scroll-lock-btn');
+        btn.textContent = state.autoScroll ? '↓ Auto' : '↓ Manual';
+        btn.style.borderColor = state.autoScroll ? 'rgba(107,230,255,0.3)' : 'var(--border)';
+        if (state.autoScroll) {
+          const terminal = $('log-terminal');
+          terminal.scrollTop = terminal.scrollHeight;
+        }
+      });
+
+      $('log-search').addEventListener('input', debounce((e) => {
+        state.logSearch = e.target.value.trim();
+        renderLogs();
+      }, 200));
+
+      // Log filter chips
+      $('log-filter-row').addEventListener('click', (e) => {
+        const chip = e.target.closest('.filter-chip');
+        if (!chip) return;
+        state.logFilter = chip.dataset.filter;
+        $('log-filter-row').querySelectorAll('.filter-chip').forEach((c) => c.classList.toggle('active', c.dataset.filter === state.logFilter));
+        renderLogs();
+      });
+
+      // Keyboard shortcuts
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') closeDialog(false);
+        if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+          e.preventDefault();
+          if ($('app-view').style.display !== 'none') saveConfig();
+        }
+      });
+    }
+
+    async function init() {
+      bindEvents();
+      const saved = getStoredToken();
+      if (!saved) { showLogin(''); return; }
+      state.token = saved;
+      $('token-input').value = saved;
+      try {
+        await verifyToken(saved);
+        showApp();
+        await bootstrapApp();
+      } catch (error) {
+        showLogin('登录已失效，请重新输入管理令牌');
+      }
+    }
+
+    init();
+  </script>
+</body>
+</html>

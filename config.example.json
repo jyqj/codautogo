@@ -1,0 +1,55 @@
+{
+  "clean": {
+    "base_url": "https://your-cpa-host.example.com",
+    "token": "YOUR_CPA_PASSWORD",
+    "target_type": "codex",
+    "workers": 20,
+    "delete_workers": 20,
+    "timeout": 10,
+    "retries": 1,
+    "user_agent": "codex_cli_rs/0.76.0 (Debian 13.0.0; x86_64) WindowsTerminal",
+    "used_percent_threshold": 90
+  },
+  "maintainer": {
+    "min_candidates": 50,
+    "loop_interval_seconds": 60
+  },
+  "run": {
+    "workers": 1,
+    "proxy": "",
+    "failure_threshold_for_cooldown": 5,
+    "failure_cooldown_seconds": 45
+  },
+  "output": {
+    "accounts_file": "accounts.txt",
+    "csv_file": "registered_accounts.csv",
+    "ak_file": "ak.txt",
+    "rk_file": "rk.txt",
+    "save_local": false
+  },
+  "total_accounts": 100,
+  "concurrent_workers": 1,
+  "proxy": "",
+  "cf_mail_configs": [
+    {
+      "name": "cfmail-1",
+      "worker_domain": "your-worker-domain-1.example.com",
+      "email_domain": "your-mail-domain-1.example.com",
+      "admin_password": "replace-me-1"
+    },
+    {
+      "name": "cfmail-2",
+      "worker_domain": "your-worker-domain-2.example.com",
+      "email_domain": "your-mail-domain-2.example.com",
+      "admin_password": "replace-me-2"
+    }
+  ],
+  "oauth_issuer": "https://auth.openai.com",
+  "oauth_client_id": "app_EMoamEEZ73f0CkXaXp7hrann",
+  "oauth_redirect_uri": "http://localhost:1455/auth/callback",
+  "workspace_record_workers": 1,
+  "account_record_workers": 1,
+  "workspace_login_workers": 1,
+  "proxy_mode": "file",
+  "proxy_file": "/app/runtime/proxies.txt"
+}

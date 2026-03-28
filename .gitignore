@@ -1,0 +1,51 @@
+# 构建产物
+bin/
+/codex
+/codex-server
+*.exe
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# 运行时产物（账号/token/状态数据）
+accounts.txt
+registered_accounts.csv
+ak.txt
+rk.txt
+pending_oauth.json
+proxies_usage.json
+daily_counter.json
+space_record_status.json
+
+# 代理文件
+proxies.txt
+
+# 实际配置（含敏感信息）
+config.json
+
+# Python 痕迹
+__pycache__/
+*.pyc
+venv/
+
+# 日志
+*.log
+logs/*
+!logs/.gitkeep
+
+# Docker 运行挂载目录
+runtime/*
+!runtime/.gitkeep
+
+# 环境变量（包含敏感信息）
+.env
+.env.*

@@ -1,0 +1,38 @@
+services:
+  codex:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: codex
+    restart: unless-stopped
+    working_dir: /app
+    environment:
+      TZ: Asia/Shanghai
+    volumes:
+      - ./config.json:/app/config.json:ro
+      - ./.env:/app/.env:ro
+      - ./logs:/app/logs
+      - ./runtime:/app/runtime
+    command: []
+
+  codex-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: codex-server
+    restart: unless-stopped
+    working_dir: /app
+    ports:
+      - "8318:8318"
+    environment:
+      TZ: Asia/Shanghai
+      APP_HOST: "0.0.0.0"
+      APP_PORT: "8318"
+      APP_DATA_DIR: "/app"
+      APP_ADMIN_TOKEN: "${APP_ADMIN_TOKEN:-}"
+    volumes:
+      - ./config.json:/app/config.json
+      - ./.env:/app/.env:ro
+      - ./logs:/app/logs
+      - ./runtime:/app/runtime
+    command: ["codex-server"]
