@@ -634,10 +634,21 @@ func PerformOAuthLoginHTTP(ctx context.Context, cfg *Config, factory *ClientFact
 	}
 
 	if pageType == "email_otp_verification" || strings.Contains(continueURL, "email-verification") {
+		// 先 GET /email-verification 建立 OTP 页面上下文（与注册流一致）
+		evURL := cfg.OAuthIssuer + "/email-verification"
+		if strings.HasPrefix(continueURL, "http") && strings.Contains(continueURL, "email-verification") {
+			evURL = continueURL
+		}
+		reqEV, _ := sess.NewRequest(ctx, "GET", evURL, nil, BuildNavigateHeaders(sess.Profile, cfg.OAuthIssuer+"/log-in/password", "same-origin"))
+		DoRequest(reqEV, sess.Client)
+
 		validationHeaders := BuildCommonHeaders(sess.Profile, cfg.OAuthIssuer+"/email-verification", cfg.OAuthIssuer, "same-origin")
 		validationHeaders["oai-device-id"] = deviceID
 		for k, v := range GenerateDatadogTrace() {
 			validationHeaders[k] = v
+		}
+		if sentinelTok, err := buildSentinelToken(sess, deviceID, "email_otp_validate"); err == nil && sentinelTok != "" {
+			validationHeaders["openai-sentinel-token"] = sentinelTok
 		}
 		validated := false
 		if mailClient != nil {
@@ -690,6 +701,7 @@ func PerformOAuthLoginHTTP(ctx context.Context, cfg *Config, factory *ClientFact
 			}
 			if validated {
 				fmt.Printf("  [耗时] oauth_email_otp: %.2fs\n", time.Since(otpWaitStart).Seconds())
+				fmt.Printf("  [OTP后] continue_url: %s | page.type: %s\n", truncate(continueURL, 160), pageType)
 			}
 		}
 		if !validated {
@@ -707,6 +719,9 @@ func PerformOAuthLoginHTTP(ctx context.Context, cfg *Config, factory *ClientFact
 				headersCreate["oai-device-id"] = deviceID
 				for k, v := range GenerateDatadogTrace() {
 					headersCreate[k] = v
+				}
+				if sentinelTok, err := buildSentinelToken(sess, deviceID, "authorize_continue"); err == nil && sentinelTok != "" {
+					headersCreate["openai-sentinel-token"] = sentinelTok
 				}
 				reqCreate, _ := sess.NewJSONRequest(ctx, "POST", cfg.OAuthIssuer+"/api/accounts/create_account", map[string]any{"name": strings.TrimSpace(firstName + " " + lastName), "birthdate": birthdate}, headersCreate)
 				respCreate, bodyCreate, _ := DoRequest(reqCreate, sess.Client)

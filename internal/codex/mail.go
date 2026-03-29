@@ -103,7 +103,7 @@ func DescribeMailProviderChain(cfg *Config) string {
 }
 
 func (s *TabMailService) tabMailURL() string {
-	return defaultString(os.Getenv("TABMAIL_URL"), "http://192.229.101.130:3000")
+	return defaultString(os.Getenv("TABMAIL_URL"), "http://192.229.101.130:8080")
 }
 
 func (s *TabMailService) tenantID() string {
@@ -347,7 +347,7 @@ func (c *CFWorkerOTPClient) GetRecentOTP(maxAge time.Duration) *OTPCandidate {
 }
 
 func (c *TabMailOTPClient) FetchLatestMailID(ctx context.Context) (int, error) {
-	target := fmt.Sprintf("%s/api/v1/mailbox/%s", strings.TrimRight(defaultString(os.Getenv("TABMAIL_URL"), "http://192.229.101.130:3000"), "/"), c.email)
+	target := fmt.Sprintf("%s/api/v1/mailbox/%s", strings.TrimRight(defaultString(os.Getenv("TABMAIL_URL"), "http://192.229.101.130:8080"), "/"), c.email)
 	req, _ := c.session.NewRequest(ctx, "GET", target, nil, nil)
 	resp, body, err := DoRequest(req, c.session.Client)
 	if err != nil {
